@@ -19,7 +19,7 @@ pub mod prelude {
         AppState, InGameSystems, MainSystems, PauseState, PlayingState, Restart, SimulationSystems,
         VfxSystems,
     };
-    pub use super::view::{CHARACTER_FEET_POS_OFFSET, YSort, ZLayer, shadow};
+    pub use super::view::{CHARACTER_FEET_POS_OFFSET, YSort, ZLayer, point_light, shadow};
 }
 
 pub(super) fn plugin(app: &mut App) {
