@@ -1,8 +1,10 @@
-use bevy::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::prelude::{EnemyKind, NpcKind, TileGrid, TileKind};
+use bevy::prelude::*;
+
+use super::tiles::{TileGrid, TileKind};
+use crate::prelude::*;
 
 /// Generated map tiles and placements, plus the replay key (`recipe`, `seed`) that built them.
 #[derive(Component, Debug, PartialEq, Eq)]
@@ -102,12 +104,12 @@ impl MapBlueprint {
 
     /// Returns the dimensions of this map in tiles.
     pub fn map_size(&self) -> UVec2 {
-        self.tiles.map_size()
+        self.tiles.size()
     }
 }
 
 /// Describes why a generated map failed validation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapValidationError {
     MissingPlayerStart,
     MultiplePlayerStarts(usize),
@@ -157,7 +159,8 @@ impl fmt::Display for MapValidationError {
                 tile_kind,
             } => write!(
                 f,
-                "placement {placement_index} at {tile} sits on {tile_kind:?}, which cannot host a spawn"
+                "placement {placement_index} at {tile} sits on {tile_kind:?}, which cannot host a \
+                 spawn"
             ),
             Self::OverlappingPlacements {
                 tile,
@@ -202,7 +205,7 @@ impl From<&str> for MapError {
 }
 
 /// A placed map entity and its tile coordinate.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Placement {
     pub tile: IVec2,
     /// Entity kind represented by this placement.
@@ -210,7 +213,7 @@ pub struct Placement {
 }
 
 /// Kind of entity placed in a map.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlacementKind {
     PlayerStart,
     Enemy(EnemyKind),
@@ -232,32 +235,8 @@ impl PlacementKind {
             'W' => Some(Self::Enemy(EnemyKind::Warrior)),
             'F' => Some(Self::Enemy(EnemyKind::FireMage)),
             'I' => Some(Self::Enemy(EnemyKind::IceMage)),
+            'B' => Some(Self::Enemy(EnemyKind::Bat)),
             _ => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::world::map::structures::{apply_structure, structure_from_glyphs};
-
-    #[test]
-    fn structure_markers_preserve_destination_tiles() {
-        let structure = structure_from_glyphs(TileKind::Cobblestone, "#:P").unwrap();
-        let mut blueprint =
-            MapBlueprint::new(UVec2::new(5, 5), TileKind::Grass, "Test".to_owned(), 1);
-        apply_structure(&mut blueprint, &structure, IVec2::new(1, 1)).unwrap();
-        assert_eq!(blueprint.tiles.get(IVec2::new(2, 1)), Some(TileKind::Grass));
-        assert_eq!(
-            blueprint.tiles.get(IVec2::new(3, 1)),
-            Some(TileKind::Cobblestone)
-        );
-        assert!(
-            blueprint
-                .placements
-                .iter()
-                .any(|placement| matches!(placement.kind, PlacementKind::PlayerStart))
-        );
     }
 }

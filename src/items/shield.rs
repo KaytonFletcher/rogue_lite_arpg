@@ -1,39 +1,28 @@
-use std::{
-    collections::HashSet,
-    f32::consts::{FRAC_PI_2, FRAC_PI_4, PI},
-};
+use std::collections::HashSet;
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 use avian2d::prelude::*;
-use bevy::{prelude::*, ui_widgets::observe};
+use bevy::prelude::*;
+use bevy::ui_widgets::observe;
 
-use crate::{
-    items::{
-        Item, ItemOf, ItemType,
-        equipment::{EquipmentSlot, Equippable, Equipped},
-        prelude::UseEquipment,
-    },
-    prelude::*,
-};
+use super::equipment::prelude::DEFAULT_EQUIPMENT_POSES;
+use crate::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
-        (update_active_shields, reflect_projectiles).in_set(InGameSystems::Simulation),
+        (
+            orient_active_shields.in_set(SimulationSystems::Act),
+            reflect_projectiles.in_set(SimulationSystems::Upkeep),
+        ),
     );
 }
 
-pub fn magic_shield(
-    sprites: &Res<SpriteAssets>,
-    sprite_layouts: &Res<SpriteSheetLayouts>,
-) -> impl Bundle {
+pub fn magic_shield(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl Bundle {
     (
         Name::new("Magic Shield"),
-        Item::new(355, ItemType::Tome),
-        Equippable::new(
-            EquipmentSlot::Offhand,
-            0.5,
-            &DEFAULT_EQUIPMENT_TRANSFORM_MAP,
-        ),
+        Item::new(355, ItemKind::Tome),
+        Equippable::new(EquipmentSlot::Offhand, 0.5, &DEFAULT_EQUIPMENT_POSES),
         ManaCost(5.0),
         ManaDrainRate(20.0),
         ProjectileReflection,
@@ -43,28 +32,21 @@ pub fn magic_shield(
         Sprite {
             image: sprites.magic_shield.clone(),
             texture_atlas: Some(TextureAtlas {
-                layout: sprite_layouts.shield_layout.clone(),
+                layout: sprite_layouts.shield.clone(),
                 index: 0,
             }),
             ..default()
         },
-        observe(on_shield_block),
-        observe(on_shield_deactivated),
+        observe(on_start_shield),
+        observe(on_stop_shield),
     )
 }
 
-pub fn knight_shield(
-    sprites: &Res<SpriteAssets>,
-    sprite_layouts: &Res<SpriteSheetLayouts>,
-) -> impl Bundle {
+pub fn knight_shield(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl Bundle {
     (
         Name::new("Knight Shield"),
-        Item::new(355, ItemType::Tome),
-        Equippable::new(
-            EquipmentSlot::Offhand,
-            0.5,
-            &DEFAULT_EQUIPMENT_TRANSFORM_MAP,
-        ),
+        Item::new(355, ItemKind::Tome),
+        Equippable::new(EquipmentSlot::Offhand, 0.5, &DEFAULT_EQUIPMENT_POSES),
         Shield {
             hitbox: Collider::rectangle(25.0, 25.0),
         },
@@ -73,13 +55,13 @@ pub fn knight_shield(
         Sprite {
             image: sprites.knight_shield.clone(),
             texture_atlas: Some(TextureAtlas {
-                layout: sprite_layouts.shield_layout.clone(),
+                layout: sprite_layouts.shield.clone(),
                 index: 0,
             }),
             ..default()
         },
-        observe(on_shield_block),
-        observe(on_shield_deactivated),
+        observe(on_start_shield),
+        observe(on_stop_shield),
     )
 }
 
@@ -103,30 +85,17 @@ struct ActiveShield {
     projectiles_reflected: HashSet<Entity>,
 }
 
-fn update_active_shields(
+/// Turns each active shield's sprite and offset toward its holder's aim.
+fn orient_active_shields(
     mut commands: Commands,
-    time: Res<Time>,
     mut active_shield_query: Query<
-        (Entity, &ManaDrainRate, &ItemOf, &mut Sprite),
+        (Entity, &ItemOf, &mut Sprite),
         (With<ActiveShield>, With<Equipped>),
     >,
-    mut holder_query: Query<(&Vision, Option<&mut Mana>)>,
+    holder_query: Query<&Vision>,
 ) -> Result {
-    for (shield_entity, mana_drain_rate, item_of, mut shield_sprite) in &mut active_shield_query {
-        let (vision, mana) = holder_query.get_mut(item_of.0)?;
-
-        if let Some(mut mana) = mana {
-            let drain_amount = ManaCost(mana_drain_rate.0 * time.delta_secs());
-
-            if mana.has_enough_mana(&drain_amount) {
-                mana.use_mana(&drain_amount);
-            } else {
-                commands.trigger(StopUsingEquipment {
-                    entity: shield_entity,
-                });
-                continue;
-            }
-        }
+    for (shield_entity, item_of, mut shield_sprite) in &mut active_shield_query {
+        let vision = holder_query.get(item_of.holder)?;
 
         let block_angle = vision.aim_direction.y.atan2(vision.aim_direction.x) + FRAC_PI_2;
 
@@ -172,17 +141,19 @@ fn update_active_shields(
     Ok(())
 }
 
-fn on_shield_block(
-    used_shield: On<UseEquipment>,
+/// Start observer: raises the shield and begins blocking.
+fn on_start_shield(
+    used_shield: On<StartUsingEquipment>,
     mut commands: Commands,
     mut shield_query: Query<&Shield>,
 ) {
-    let Ok(shield) = shield_query.get_mut(used_shield.entity) else {
+    let Ok(shield) = shield_query.get_mut(used_shield.item) else {
         warn!("Tried to block with invalid shield");
         return;
     };
 
-    commands.entity(used_shield.entity).insert((
+    commands.entity(used_shield.item).insert((
+        EquipmentInUse,
         ActiveShield {
             projectiles_reflected: HashSet::default(),
         },
@@ -198,7 +169,7 @@ fn reflect_projectiles(
         With<ProjectileReflection>,
     >,
     mut projectile_query: Query<(&mut LinearVelocity, &mut Transform), With<Projectile>>,
-    enemy_query: Query<&Enemy>,
+    holder_query: Query<&CombatSide>,
 ) {
     for (mut shield, colliding_entities, child_of) in &mut shield_query {
         for &colliding_entity in colliding_entities.iter() {
@@ -208,8 +179,10 @@ fn reflect_projectiles(
             if let Ok((mut linear_velocity, mut transform)) =
                 projectile_query.get_mut(colliding_entity)
             {
-                // If shield blocker is enemy, reflected projectile can now hurt the player! (and vice-versa)
-                let is_blocker_enemy = enemy_query.contains(child_of.parent());
+                // The blocker takes over: the reflected projectile now hurts the blocker's enemies.
+                let Ok(side) = holder_query.get(child_of.parent()) else {
+                    continue;
+                };
 
                 // Reverse direction of projectile! Reflect!
                 linear_velocity.0 = -linear_velocity.0;
@@ -217,13 +190,15 @@ fn reflect_projectiles(
                 // Rotate projectile sprite to face new velocity direction
                 transform.rotation = Quat::from_rotation_z(linear_velocity.0.to_angle());
 
-                commands
-                    .entity(colliding_entity)
-                    .insert(CollisionLayers::new(
+                commands.entity(colliding_entity).insert((
+                    CollisionLayers::new(
                         GameCollisionLayer::PROJECTILE_MEMBERSHIPS,
-                        LayerMask::from(DamageSource::from(is_blocker_enemy))
-                            | GameCollisionLayer::HighObstacle,
-                    ));
+                        LayerMask::from(side.target_hurtbox()) | GameCollisionLayer::HighObstacle,
+                    ),
+                    ProjectileAttacker {
+                        attacker: Some(child_of.parent()),
+                    },
+                ));
 
                 shield.projectiles_reflected.insert(colliding_entity);
             }
@@ -231,7 +206,8 @@ fn reflect_projectiles(
     }
 }
 
-fn on_shield_deactivated(
+/// Stop observer: lowers the shield and restores its resting transform.
+fn on_stop_shield(
     shield: On<StopUsingEquipment>,
     mut commands: Commands,
     holder_query: Query<&FacingDirection>,
@@ -240,25 +216,20 @@ fn on_shield_deactivated(
         (With<Shield>, With<ActiveShield>),
     >,
 ) {
-    let Ok((mut shield_sprite, item_of, equippable)) = shield_query.get_mut(shield.entity) else {
+    let Ok((mut shield_sprite, _, equippable)) = shield_query.get_mut(shield.item) else {
         warn!("Offhand missing Shield or ActiveShield");
         return;
     };
 
-    let Ok(facing_direction) = holder_query.get(item_of.0) else {
+    let Ok(facing_direction) = holder_query.get(shield.holder) else {
         warn!("Tried to stop blocking but entity no facing direction");
         return;
     };
 
     commands
-        .entity(shield.entity)
-        .remove::<(ActiveShield, Collider)>()
-        .insert(
-            *equippable
-                .transforms
-                .get(facing_direction)
-                .expect("Failed to deactivate shield"),
-        );
+        .entity(shield.item)
+        .remove::<(EquipmentInUse, ActiveShield, Collider, CollisionLayers)>()
+        .insert(equippable.poses.transform(*facing_direction));
 
     if let Some(atlas) = &mut shield_sprite.texture_atlas {
         atlas.index = 0;

@@ -4,14 +4,15 @@ mod map;
 mod portal;
 
 use bevy::prelude::*;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 pub mod prelude {
-    pub use super::chest::*;
-    pub use super::gold::*;
-    pub use super::map::prelude::*;
-    pub use super::portal::*;
+    pub(crate) use super::MapRng;
+    pub use super::chest::SpawnChests;
+    pub use super::gold::DropGold;
+    pub use super::map::prelude::{Anchor, MapRequest, NextMap, TILE_SIZE, TileToWorld, place};
+    pub use super::portal::portal;
 }
 
 pub(super) fn plugin(app: &mut App) {
@@ -25,7 +26,8 @@ pub(super) fn plugin(app: &mut App) {
     app.insert_resource(MapRng::seeded(seed));
 }
 
-#[derive(Resource)]
+/// Seeded root generator for map layouts, also used for choices made before a map is built.
+#[derive(Resource, Deref, DerefMut)]
 pub(crate) struct MapRng(ChaCha8Rng);
 
 impl MapRng {
@@ -35,11 +37,11 @@ impl MapRng {
 
     /// Draws the build seed for the next map.
     pub(crate) fn next_map_seed(&mut self) -> u64 {
-        self.0.next_u64()
+        self.next_u64()
     }
 
-    /// Root generator for choices made before a map is built, such as the weighted recipe pick.
-    pub(crate) fn rng(&mut self) -> &mut ChaCha8Rng {
-        &mut self.0
+    /// Deterministic coin flip on the map stream for spawn-time variants.
+    pub(crate) fn flip(&mut self) -> bool {
+        self.random_bool(0.5)
     }
 }

@@ -7,18 +7,19 @@ mod view;
 
 #[cfg(not(feature = "dev"))]
 use bevy::asset::AssetMetaCheck;
-
 use bevy::prelude::*;
-use bevy_behave::prelude::BehavePlugin;
 use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 use bevy_lit::prelude::Lighting2dPlugin;
 use bevy_tweening::TweeningPlugin;
 
 pub mod prelude {
-    pub use super::assets::*;
-    pub use super::physics::*;
-    pub use super::schedule::*;
-    pub use super::view::*;
+    pub use super::assets::{GameIcons, Shadows, SpriteAssets, SpriteSheetLayouts, TileAssets};
+    pub use super::physics::GameCollisionLayer;
+    pub use super::schedule::{
+        AppState, InGameSystems, MainSystems, PauseState, PlayingState, Restart, SimulationSystems,
+        VfxSystems,
+    };
+    pub use super::view::{CHARACTER_FEET_POS_OFFSET, YSort, ZLayer, shadow};
 }
 
 pub(super) fn plugin(app: &mut App) {
@@ -35,7 +36,7 @@ pub(super) fn plugin(app: &mut App) {
                 meta_check: AssetMetaCheck::Never,
                 ..default()
             })
-            .set(view::get_window_plugin())
+            .set(view::window_plugin())
             .set(ImagePlugin::default_nearest()),
     );
 
@@ -48,10 +49,5 @@ pub(super) fn plugin(app: &mut App) {
     ));
 
     // Third-party plugins
-    app.add_plugins((
-        BehavePlugin::default(),
-        EnhancedInputPlugin,
-        Lighting2dPlugin,
-        TweeningPlugin,
-    ));
+    app.add_plugins((EnhancedInputPlugin, Lighting2dPlugin, TweeningPlugin));
 }

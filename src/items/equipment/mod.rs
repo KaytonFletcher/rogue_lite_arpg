@@ -1,105 +1,37 @@
-use core::fmt;
-use std::sync::LazyLock;
-
-use bevy::{platform::collections::HashMap, prelude::*};
+use bevy::prelude::*;
 
 mod equip;
 mod equipment_transform;
+mod equippable;
+mod slot;
 mod use_equipped;
 
 use crate::prelude::*;
 
 pub mod prelude {
-    pub use super::equip::*;
-    pub use super::equipment_transform::*;
-    pub use super::use_equipped::*;
-    pub use super::{
-        EquipmentSlot, Equippable, Equipped, Mainhand, MainhandOf, Offhand, OffhandOf,
+    pub use super::equip::{Equip, Unequip};
+    pub use super::equipment_transform::{
+        DEFAULT_EQUIPMENT_POSES, DirectionalPoses, EquipmentPose,
+    };
+    pub use super::equippable::{Equippable, Equipped};
+    pub use super::slot::{EquipmentSlot, Mainhand, Offhand};
+    pub use super::use_equipped::{
+        EquipmentInUse, EquipmentRead, EquipmentUsage, EquipmentUseFailed, EquipmentUseFailure,
+        EquipmentUseFinished, EquipmentUseSucceeded, StartUsingEquipment, StopUsingEquipment,
     };
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_plugins(equip::plugin);
+    app.add_plugins(equip::plugin)
+        .add_observer(use_equipped::on_equipment_use_ended);
 
     app.add_systems(
         Update,
         (
-            // Always run this system InGame and InMenu so weapon transforms update as inventory is interacted with
+            // Always run this system InGame and InMenu so weapon transforms update as inventory is
+            // interacted with
             equipment_transform::update_equipment_transforms.in_set(MainSystems::Shared),
-            use_equipped::tick_equippable_use_rate.in_set(InGameSystems::Simulation),
+            use_equipped::tick_equippable_cooldown.in_set(SimulationSystems::Upkeep),
         ),
     );
-
-    app.add_observer(use_equipped::on_ai_equipment_used);
-}
-
-#[derive(Component, Clone, Debug)]
-pub struct Equippable {
-    pub slot: EquipmentSlot,
-    pub use_rate: Timer, // swing a sword, shoot a weapon, etc...
-    pub transforms: &'static HashMap<FacingDirection, Transform>,
-}
-
-impl Equippable {
-    pub fn new(
-        slot: EquipmentSlot,
-        duration: f32,
-        transforms: &'static LazyLock<HashMap<FacingDirection, Transform>>,
-    ) -> Self {
-        Equippable {
-            slot,
-            transforms,
-            use_rate: Timer::from_seconds(duration, TimerMode::Once),
-        }
-    }
-}
-
-/// Goes on the equipment marking where it should be equipped
-///
-/// Note: We pass this by value a lot, don't add data to it without consideration for passing this by reference
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum EquipmentSlot {
-    Mainhand,
-    Offhand,
-}
-
-impl fmt::Display for EquipmentSlot {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let variant_name = match *self {
-            EquipmentSlot::Mainhand => "Main Hand",
-            EquipmentSlot::Offhand => "Off Hand",
-        };
-        write!(f, "{variant_name}")
-    }
-}
-
-#[derive(Component, Clone, Debug)]
-pub struct Equipped;
-
-#[derive(Component, Clone)]
-#[relationship(relationship_target = Mainhand)]
-pub struct MainhandOf(pub Entity);
-
-#[derive(Component, Clone, Debug)]
-#[relationship_target(relationship = MainhandOf)]
-pub struct Mainhand(Entity);
-
-impl Mainhand {
-    pub fn get(&self) -> Entity {
-        self.0
-    }
-}
-
-#[derive(Component, Clone)]
-#[relationship(relationship_target = Offhand)]
-pub struct OffhandOf(pub Entity);
-
-#[derive(Component, Clone, Debug)]
-#[relationship_target(relationship = OffhandOf)]
-pub struct Offhand(Entity);
-
-impl Offhand {
-    pub fn get(&self) -> Entity {
-        self.0
-    }
 }

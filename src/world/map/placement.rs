@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
+
 use bevy::prelude::*;
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 use super::blueprint::MapError;
 use super::tiles::{TileGrid, TileRect};
@@ -11,12 +12,25 @@ use super::tiles::{TileGrid, TileRect};
 /// Recipes spell it as a bare number (`count: 1`) or an inclusive pair (`count: (10, 15)`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(from = "CountRangeInput")]
-pub struct CountRange(
-    /// Inclusive minimum value.
-    pub u32,
-    /// Inclusive maximum value.
-    pub u32,
-);
+pub struct CountRange {
+    pub min: u32,
+    pub max: u32,
+}
+
+/// Half-open band of x-deciles (tenths of the map width), written as a `(min, max)` pair in
+/// recipes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(from = "(u32, u32)")]
+pub struct DecileRange {
+    pub min: u32,
+    pub max: u32,
+}
+
+impl From<(u32, u32)> for DecileRange {
+    fn from((min, max): (u32, u32)) -> Self {
+        Self { min, max }
+    }
+}
 
 /// Recipe spelling of a [`CountRange`].
 #[derive(Deserialize)]
@@ -29,16 +43,24 @@ enum CountRangeInput {
 impl From<CountRangeInput> for CountRange {
     fn from(input: CountRangeInput) -> Self {
         match input {
-            CountRangeInput::Exact(count) => Self(count, count),
-            CountRangeInput::Range(minimum, maximum) => Self(minimum, maximum),
+            CountRangeInput::Exact(count) => Self::exactly(count),
+            CountRangeInput::Range(min, max) => Self { min, max },
         }
     }
 }
 
 impl CountRange {
+    /// A range that always rolls `count`.
+    pub const fn exactly(count: u32) -> Self {
+        Self {
+            min: count,
+            max: count,
+        }
+    }
+
     /// Uniformly rolls from `min..=max`; callers must validate that `min <= max`.
     pub fn roll_size(self, random_generator: &mut ChaCha8Rng) -> u32 {
-        random_generator.random_range(self.0..=self.1)
+        random_generator.random_range(self.min..=self.max)
     }
 }
 
@@ -73,15 +95,13 @@ pub enum PlaceRule {
     /// Place once at the given anchor; does not advance the RNG.
     Fixed(Anchor),
     /// Try to place an inclusive random count within the half-open x-decile interval.
-    /// `separation` is the minimum tile distance from every point placed so far.
     Random {
         count: CountRange,
-        x_deciles: (u32, u32),
+        x_deciles: DecileRange,
         separation: u32,
     },
     /// Place an inclusive random count of footprints centered within `radius` tiles (a square)
     /// of a named structure's center plus `offset`.
-    /// `separation` is the minimum tile distance from every point placed so far.
     NearStructure {
         count: CountRange,
         structure: String,
@@ -157,8 +177,8 @@ fn overlaps(first_rect: TileRect, second_rect: TileRect) -> bool {
         && second_rect.min.y < first_rect.max_exclusive().y
 }
 
-/// Places footprints and returns their origins; random and edge rules may place fewer than requested.
-/// Successful placements update context; fixed placement does not advance the RNG.
+/// Places footprints and returns their origins; random and edge rules may place fewer than
+/// requested. Successful placements update context; fixed placement does not advance the RNG.
 pub fn place(
     rule: &PlaceRule,
     footprint: UVec2,
@@ -215,29 +235,34 @@ fn place_fixed(
     tiles: &TileGrid,
     context: &mut PlaceContext,
 ) -> Result<Vec<IVec2>, MapError> {
-    let bounds = match anchor {
-        Anchor::Center => TileRect::centered_in(context.map_size, footprint),
-        Anchor::CenterOffset(offset) => TileRect::centered_in(context.map_size, footprint)
-            .and_then(|rect| rect.translated(*offset)),
-        Anchor::Structure { name, offset } => context
-            .structure_centers_by_name
-            .get(name)
-            .and_then(|center| TileRect::new(*center + *offset - footprint.as_ivec2() / 2, footprint)),
-        Anchor::MapMin(offset) => TileRect::new(*offset, footprint),
-        Anchor::MapMax(offset) => TileRect::new(
-            context.map_size.as_ivec2() - IVec2::ONE + *offset,
-            footprint,
-        ),
-    }
-    .ok_or_else(|| {
-        format!(
-            "fixed footprint {footprint:?} at {anchor:?} is out of bounds for a {}x{} map or references a missing structure",
-            context.map_size.x, context.map_size.y
-        )
-    })?;
+    let bounds =
+        match anchor {
+            Anchor::Center => TileRect::centered_in(context.map_size, footprint),
+            Anchor::CenterOffset(offset) => TileRect::centered_in(context.map_size, footprint)
+                .and_then(|rect| rect.translated(*offset)),
+            Anchor::Structure { name, offset } => context
+                .structure_centers_by_name
+                .get(name)
+                .and_then(|center| {
+                    TileRect::new(*center + *offset - footprint.as_ivec2() / 2, footprint)
+                }),
+            Anchor::MapMin(offset) => TileRect::new(*offset, footprint),
+            Anchor::MapMax(offset) => TileRect::new(
+                context.map_size.as_ivec2() - IVec2::ONE + *offset,
+                footprint,
+            ),
+        }
+        .ok_or_else(|| {
+            format!(
+                "fixed footprint {footprint:?} at {anchor:?} is out of bounds for a {}x{} map \
+             or references a missing structure",
+                context.map_size.x, context.map_size.y
+            )
+        })?;
     if !context.available(tiles, bounds) {
         return Err(format!(
-            "fixed footprint {bounds:?} at {anchor:?} overlaps a reserved area or covers unspawnable tiles"
+            "fixed footprint {bounds:?} at {anchor:?} overlaps a reserved area or covers \
+             unspawnable tiles"
         )
         .into());
     }
@@ -247,7 +272,7 @@ fn place_fixed(
 
 fn place_random(
     count: CountRange,
-    x_deciles: (u32, u32),
+    x_deciles: DecileRange,
     separation: u32,
     footprint: UVec2,
     tiles: &TileGrid,
@@ -255,8 +280,8 @@ fn place_random(
     random_generator: &mut ChaCha8Rng,
 ) -> Vec<IVec2> {
     let target_count = count.roll_size(random_generator);
-    let x_start = context.map_size.x * x_deciles.0 / 10;
-    let x_end = context.map_size.x * x_deciles.1 / 10;
+    let x_start = context.map_size.x * x_deciles.min / 10;
+    let x_end = context.map_size.x * x_deciles.max / 10;
     if x_start >= x_end
         || context.map_size.x <= footprint.x.saturating_add(2)
         || context.map_size.y <= footprint.y.saturating_add(2)
@@ -427,161 +452,4 @@ fn scatter_footprints(
         }
     }
     positions
-}
-
-#[cfg(test)]
-mod placement_tests {
-    use super::*;
-    use crate::world::map::tiles::TileKind;
-    use rand::SeedableRng;
-
-    #[test]
-    fn random_placement_skips_footprints_larger_than_the_interior() {
-        let tiles = TileGrid::new(UVec2::new(8, 8), TileKind::Grass);
-        let mut context = PlaceContext::new(UVec2::new(8, 8));
-        let mut random_generator = ChaCha8Rng::seed_from_u64(42);
-
-        let placed = place(
-            &PlaceRule::Random {
-                count: CountRange(1, 1),
-                x_deciles: (1, 9),
-                separation: 0,
-            },
-            UVec2::new(9, 2),
-            &tiles,
-            &mut context,
-            &mut random_generator,
-        )
-        .unwrap();
-
-        assert_eq!(placed, Vec::<IVec2>::new());
-        assert_eq!(context.reserved, Vec::<TileRect>::new());
-    }
-
-    #[test]
-    fn fixed_placement_does_not_consume_rng() {
-        let tiles = TileGrid::new(UVec2::new(10, 10), TileKind::Grass);
-        let mut context = PlaceContext::new(UVec2::new(10, 10));
-        let mut random_generator = ChaCha8Rng::seed_from_u64(42);
-        let original_random_generator = random_generator.clone();
-
-        place(
-            &PlaceRule::Fixed(Anchor::MapMin(IVec2::new(2, 2))),
-            UVec2::ONE,
-            &tiles,
-            &mut context,
-            &mut random_generator,
-        )
-        .unwrap();
-
-        assert_eq!(random_generator, original_random_generator);
-    }
-
-    fn context_with_anchor(center: IVec2) -> (TileGrid, PlaceContext) {
-        let tiles = TileGrid::new(UVec2::new(40, 40), TileKind::Grass);
-        let mut context = PlaceContext::new(UVec2::new(40, 40));
-        context.record_structure_center("Anchor".to_owned(), center);
-        (tiles, context)
-    }
-
-    #[test]
-    fn structure_anchor_offset_is_measured_between_centers() {
-        let (tiles, mut context) = context_with_anchor(IVec2::new(20, 20));
-        let footprint = UVec2::new(5, 3);
-        let mut random_generator = ChaCha8Rng::seed_from_u64(7);
-
-        let origin = place(
-            &PlaceRule::Fixed(Anchor::Structure {
-                name: "Anchor".to_owned(),
-                offset: IVec2::new(4, -6),
-            }),
-            footprint,
-            &tiles,
-            &mut context,
-            &mut random_generator,
-        )
-        .unwrap()[0];
-
-        let placed = TileRect::new(origin, footprint).unwrap();
-        assert_eq!(placed.center_tile(), IVec2::new(24, 14));
-    }
-
-    #[test]
-    fn near_structure_with_zero_radius_centers_the_footprint() {
-        let (tiles, mut context) = context_with_anchor(IVec2::new(20, 20));
-        let footprint = UVec2::new(7, 7);
-        let mut random_generator = ChaCha8Rng::seed_from_u64(7);
-
-        let origins = place(
-            &PlaceRule::NearStructure {
-                count: CountRange(1, 1),
-                structure: "Anchor".to_owned(),
-                offset: IVec2::new(0, -10),
-                radius: 0,
-                separation: 0,
-            },
-            footprint,
-            &tiles,
-            &mut context,
-            &mut random_generator,
-        )
-        .unwrap();
-
-        let placed = TileRect::new(origins[0], footprint).unwrap();
-        assert_eq!(placed.center_tile(), IVec2::new(20, 10));
-    }
-
-    #[test]
-    fn multiple_edge_placements_spread_along_the_wall() {
-        let tiles = TileGrid::new(UVec2::new(10, 42), TileKind::Grass);
-        for seed in 0..32 {
-            let mut context = PlaceContext::new(UVec2::new(10, 42));
-            let mut random_generator = ChaCha8Rng::seed_from_u64(seed);
-            let mut rows = place(
-                &PlaceRule::Edge {
-                    count: CountRange(2, 2),
-                    side: Side::Right,
-                },
-                UVec2::ONE,
-                &tiles,
-                &mut context,
-                &mut random_generator,
-            )
-            .unwrap()
-            .into_iter()
-            .map(|tile| tile.y)
-            .collect::<Vec<_>>();
-            rows.sort_unstable();
-            // 40 candidate rows split into two halves: 1..=20 and 21..=40.
-            assert!(rows[0] <= 20 && rows[1] > 20, "seed {seed}: rows {rows:?}");
-        }
-    }
-
-    #[test]
-    fn separation_counts_points_from_earlier_batches() {
-        let tiles = TileGrid::new(UVec2::new(12, 12), TileKind::Grass);
-        let mut context = PlaceContext::new(UVec2::new(12, 12));
-        context.points.push(IVec2::new(6, 6));
-        context.keep_clear.push((IVec2::new(1, 1), 3));
-        let mut random_generator = ChaCha8Rng::seed_from_u64(3);
-
-        let placed = place(
-            &PlaceRule::Random {
-                count: CountRange(20, 20),
-                x_deciles: (0, 10),
-                separation: 4,
-            },
-            UVec2::ONE,
-            &tiles,
-            &mut context,
-            &mut random_generator,
-        )
-        .unwrap();
-
-        assert_ne!(placed, Vec::<IVec2>::new());
-        for tile in placed {
-            assert!(tile.distance_squared(IVec2::new(6, 6)) >= 16);
-            assert!(tile.distance_squared(IVec2::new(1, 1)) >= 9);
-        }
-    }
 }

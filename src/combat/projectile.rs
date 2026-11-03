@@ -1,19 +1,18 @@
 use avian2d::prelude::*;
-use bevy::{
-    color::palettes::tailwind::{BLUE_400, YELLOW_300},
-    ecs::entity_disabling::Disabled,
-    prelude::*,
-};
+use bevy::color::palettes::tailwind::{BLUE_400, YELLOW_300};
+use bevy::ecs::entity_disabling::Disabled;
+use bevy::prelude::*;
 use bevy_lit::prelude::PointLight2d;
 
-use crate::{
-    combat::damage::{AttemptDamage, Damage, HurtBox, Knockback},
-    prelude::*,
-};
+use super::damage::{AttemptDamage, Damage, HurtBox, Knockback};
+use crate::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(Update, handle_collisions.in_set(InGameSystems::Collision))
-        .add_observer(on_fire_projectile);
+    app.add_systems(
+        Update,
+        damage_on_projectile_hit.in_set(InGameSystems::Collision),
+    )
+    .add_observer(on_fire_projectile);
 }
 
 #[derive(Component, Clone)]
@@ -36,7 +35,10 @@ pub struct Projectile {
 impl Default for Projectile {
     fn default() -> Self {
         Self {
-            damage: Damage::Range((5.0, 10.0)),
+            damage: Damage::Range {
+                min: 5.0,
+                max: 10.0,
+            },
             speed: 600.0,
             angle_offset: 0.0,
             spawn_offset: 0.0,
@@ -52,22 +54,39 @@ pub struct ProjectileOf(Entity);
 #[relationship_target(relationship = ProjectileOf, linked_spawn)]
 pub struct Projectiles(Vec<Entity>);
 
+/// Travel speed of a standard fireball, in world units per second.
+pub const FIREBALL_SPEED: f32 = 450.0;
+/// Distance a standard fireball covers during its one-second default lifespan.
+pub const FIREBALL_RANGE: f32 = 450.0;
+
 pub fn fireball(
     sprites: &SpriteAssets,
     sprite_layouts: &SpriteSheetLayouts,
     angle_offset: f32,
 ) -> impl Bundle {
+    fireball_with_speed(sprites, sprite_layouts, angle_offset, FIREBALL_SPEED)
+}
+
+/// Builds a fireball at a custom speed, scaling its lifespan so it still covers
+/// the standard fireball's travel distance.
+pub fn fireball_with_speed(
+    sprites: &SpriteAssets,
+    sprite_layouts: &SpriteSheetLayouts,
+    angle_offset: f32,
+    speed: f32,
+) -> impl Bundle {
     (
         Projectile {
             damage: Damage::Single(3.0),
-            speed: 450.0,
+            speed,
             spawn_offset: 20.0,
             angle_offset,
         },
+        Lifespan::new(FIREBALL_RANGE / speed),
         Sprite::from_atlas_image(
             sprites.fire_ball.clone(),
             TextureAtlas {
-                layout: sprite_layouts.fireball_layout.clone(),
+                layout: sprite_layouts.fireball.clone(),
                 index: 0,
             },
         ),
@@ -92,7 +111,10 @@ pub fn icebolt(
 ) -> impl Bundle {
     (
         Projectile {
-            damage: Damage::Range((10.0, 20.0)),
+            damage: Damage::Range {
+                min: 10.0,
+                max: 20.0,
+            },
             speed: 350.0,
             spawn_offset: 26.0,
             angle_offset,
@@ -100,7 +122,7 @@ pub fn icebolt(
         Sprite::from_atlas_image(
             sprites.ice_bolt.clone(),
             TextureAtlas {
-                layout: sprite_layouts.ice_bolt_layout.clone(),
+                layout: sprite_layouts.ice_bolt.clone(),
                 index: 0,
             },
         ),
@@ -119,13 +141,14 @@ pub fn icebolt(
     )
 }
 
-fn handle_collisions(
+fn damage_on_projectile_hit(
     mut commands: Commands,
     projectile_query: Query<(&Projectile, &LinearVelocity, &CollidingEntities, Entity)>,
+    attacker_query: Query<&ProjectileAttacker>,
     hurt_box_query: Query<&HurtBox>,
     reflector_query: Query<&ProjectileReflection>,
 ) {
-    for (projectile, velocity, colliding_entities, projectile_entity) in projectile_query.iter() {
+    for (projectile, velocity, colliding_entities, projectile_entity) in &projectile_query {
         // ignore further collisions after ANY collision with the projectile
         if let Some(&colliding_entity) = colliding_entities.iter().next() {
             // If the thing we collide with has a HurtBox, lets try to damage it!
@@ -133,7 +156,11 @@ fn handle_collisions(
                 commands.trigger(AttemptDamage {
                     entity: colliding_entity,
                     damage: projectile.damage,
-                    damage_source: Some(projectile_entity),
+                    source_item: Some(projectile_entity),
+                    attacker: attacker_query
+                        .get(projectile_entity)
+                        .ok()
+                        .and_then(|attacker| attacker.attacker),
                     direction: Some(velocity.normalize()),
                     ..default()
                 });
@@ -146,26 +173,23 @@ fn handle_collisions(
     }
 }
 
+/// Character that fired a projectile, stamped when it is fired and transferred
+/// to the blocker on reflection.
+#[derive(Component, Clone, Copy)]
+pub struct ProjectileAttacker {
+    pub attacker: Option<Entity>,
+}
+
+/// Request to launch a projectile template. The template is cloned; the clone
+/// becomes the live projectile carrying `ProjectileAttacker`.
 #[derive(EntityEvent)]
 pub struct FireProjectile {
     #[event_target]
-    projectile: Entity,
-    damage_source: DamageSource,
-    position: Vec2,
-    aim_direction: Vec2,
-}
-
-impl From<(Entity, DamageSource, Vec2, Vec2)> for FireProjectile {
-    fn from(
-        (projectile, damage_source, position, aim_direction): (Entity, DamageSource, Vec2, Vec2),
-    ) -> Self {
-        FireProjectile {
-            projectile,
-            damage_source,
-            position,
-            aim_direction: aim_direction.normalize(),
-        }
-    }
+    pub item: Entity,
+    pub side: CombatSide,
+    pub holder: Option<Entity>,
+    pub position: Vec2,
+    pub aim_direction: Vec2,
 }
 
 fn on_fire_projectile(
@@ -173,16 +197,21 @@ fn on_fire_projectile(
     mut commands: Commands,
     projectile_query: Query<&Projectile, Allow<Disabled>>,
 ) {
-    let projectile = projectile_query.get(fire.projectile).unwrap();
+    let Ok(projectile) = projectile_query.get(fire.item) else {
+        warn!(
+            "Tried to fire projectile from missing template {:?}",
+            fire.item
+        );
+        return;
+    };
+    let aim_direction = fire.aim_direction.normalize();
 
     // Rotate the aim direction by the projectile’s angle offset
-    let projectile_direction = fire
-        .aim_direction
-        .rotate(Vec2::from_angle(projectile.angle_offset));
+    let projectile_direction = aim_direction.rotate(Vec2::from_angle(projectile.angle_offset));
 
     let position = fire.position + (projectile_direction * projectile.spawn_offset);
 
-    let mut template = commands.entity(fire.projectile);
+    let mut template = commands.entity(fire.item);
     let mut new_projectile = template.clone_and_spawn_with_opt_out(|builder| {
         builder.linked_cloning(true);
     });
@@ -203,8 +232,11 @@ fn on_fire_projectile(
         LinearVelocity(projectile_direction * projectile.speed),
         CollisionLayers::new(
             GameCollisionLayer::PROJECTILE_MEMBERSHIPS,
-            LayerMask::from(fire.damage_source) | GameCollisionLayer::HighObstacle,
+            LayerMask::from(fire.side.target_hurtbox()) | GameCollisionLayer::HighObstacle,
         ),
+        ProjectileAttacker {
+            attacker: fire.holder,
+        },
         DespawnOnExit(AppState::Playing),
     ));
 }

@@ -31,6 +31,16 @@ impl Health {
         self.hp <= 0.0
     }
 
+    /// Current health as a `0.0..=1.0` fraction, or `None` when the health
+    /// values cannot describe a valid fraction.
+    pub fn fraction(&self) -> Option<f32> {
+        if self.hp.is_finite() && self.max_hp.is_finite() && self.max_hp > 0.0 {
+            Some((self.hp / self.max_hp).clamp(0.0, 1.0))
+        } else {
+            None
+        }
+    }
+
     fn add_health(&mut self, amount: f32) -> f32 {
         let before = self.hp;
         self.hp += amount;
@@ -43,14 +53,11 @@ impl Health {
 
 impl Default for Health {
     fn default() -> Self {
-        Health {
-            hp: 100.0,
-            max_hp: 100.0,
-        }
+        Self::new(100.0)
     }
 }
 
-pub(super) fn on_healing_event(
+pub(super) fn on_attempt_heal(
     attempt_heal: On<AttemptHeal>,
     mut commands: Commands,
     mut healed_query: Query<&mut Health>,
@@ -61,9 +68,5 @@ pub(super) fn on_healing_event(
             entity: attempt_heal.entity,
             amount: actual_amount,
         });
-        info!(
-            "Entity {} healed by {:.2} points",
-            attempt_heal.entity, actual_amount,
-        );
     }
 }

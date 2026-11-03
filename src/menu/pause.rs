@@ -1,19 +1,14 @@
 use bevy::prelude::*;
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy_enhanced_input::prelude::*;
 
-use crate::{
-    character::Purse,
-    prelude::*,
-    ui::{
-        constants::{DARK_GRAY_COLOR, FOOTER_HEIGHT},
-        primitives::{menu_header, text},
-    },
-};
+use crate::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Menu::Pause), spawn_main_menu)
         .add_systems(
             Update,
-            handle_menu_button_pressed
+            switch_menu_on_button_press
                 .run_if(in_state(Menu::Pause))
                 .in_set(MainSystems::Menu),
         );
@@ -23,9 +18,9 @@ pub(super) fn plugin(app: &mut App) {
 struct MainMenu;
 
 #[derive(Component)]
-struct MenuButton(pub Menu);
+struct MenuButton(Menu);
 
-fn handle_menu_button_pressed(
+fn switch_menu_on_button_press(
     mut button_query: Query<(&Interaction, &MenuButton)>,
     mut next_menu_state: ResMut<NextState<Menu>>,
 ) {
@@ -72,7 +67,7 @@ fn spawn_main_menu(
                     menu_button(MenuButton(Menu::Stats), "STATS"),
                 ]
             ),
-            main_menu_footer(player.get_level(), health, purse.amount, &game_progress),
+            main_menu_footer(player.level(), health, purse.amount, &game_progress),
         ],
     ));
 }
@@ -90,7 +85,7 @@ fn menu_button(marker: impl Bundle, button_text: &str) -> impl Bundle {
             ..default()
         },
         BorderColor::all(Color::srgb(0.8, 0.8, 0.8)),
-        BackgroundColor(DARK_GRAY_COLOR),
+        BackgroundColor::from(DARK_GRAY_COLOR),
         children![text(button_text, 32.0)],
     )
 }
@@ -142,4 +137,95 @@ fn main_menu_footer(
             text("Press ESC to unpause", 24.0)
         ],
     )
+}
+
+pub(super) fn pause(mut next_pause_state: ResMut<NextState<PauseState>>, mut commands: Commands) {
+    commands.spawn(menu_background());
+    next_pause_state.set(PauseState::Paused);
+}
+
+pub(super) fn unpause(mut next_pause_state: ResMut<NextState<PauseState>>) {
+    next_pause_state.set(PauseState::Running);
+}
+
+#[derive(InputAction)]
+#[action_output(bool)]
+pub(super) struct MenuBack;
+
+pub(super) fn on_menu_back(_: On<Start<MenuBack>>, mut next_menu_state: ResMut<NextState<Menu>>) {
+    next_menu_state.set(Menu::None);
+}
+
+#[derive(Component)]
+pub(super) struct MenuBackground;
+
+fn menu_background() -> impl Bundle {
+    (
+        Name::new("Menu Background"),
+        MenuBackground,
+        DespawnOnEnter(Menu::None),
+        actions!(MenuBackground[
+            (
+                Action::<MenuBack>::new(),
+                ActionSettings {
+                    require_reset: true,
+                    ..Default::default()
+                },
+                Bindings::spawn((
+                    Spawn(Binding::from(GamepadButton::East)),
+                )),
+            ),
+        ]),
+        Node {
+            width: percent(100),
+            height: percent(100),
+            ..default()
+        },
+        GlobalZIndex(1),
+        BackgroundColor::from(BACKGROUND_COLOR),
+    )
+}
+
+#[derive(InputAction)]
+#[action_output(bool)]
+pub(super) struct TogglePause;
+
+pub(super) fn on_toggle_pause(
+    _: On<Start<TogglePause>>,
+    mut next_menu_state: ResMut<NextState<Menu>>,
+    menu: Res<State<Menu>>,
+) {
+    info!("Toggling pause menu. Current menu state: {:?}", menu.get());
+    match menu.get() {
+        Menu::None => next_menu_state.set(Menu::Pause),
+        _ => next_menu_state.set(Menu::None),
+    }
+}
+#[derive(Component)]
+pub(crate) struct PauseControl;
+
+pub(crate) fn pause_actions() -> impl Bundle {
+    actions!(
+        PauseControl[(
+            Action::<TogglePause>::new(),
+            // We set `require_reset` to `true` because `ResumeGame` action uses the same input,
+            // and we want it to be triggerable only after the button is released.
+            ActionSettings {
+                require_reset: true,
+                ..Default::default()
+            },
+            // Can't allow escape on wasm because that un-grabs cursor
+            Bindings::spawn((
+                Spawn(Binding::from(KeyCode::KeyP)),
+                Spawn(Binding::from(GamepadButton::Start)),
+                #[cfg(not(target_family = "wasm"))]
+                Spawn(Binding::from(KeyCode::Escape)),
+            )),
+        )]
+    )
+}
+
+pub(super) fn release_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>) {
+    cursor.visible = true;
+    cursor.grab_mode = CursorGrabMode::None;
 }

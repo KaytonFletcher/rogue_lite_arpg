@@ -1,32 +1,27 @@
-use bevy::{prelude::*, sprite::Anchor, ui_widgets::observe};
+use bevy::prelude::*;
+use bevy::sprite::Anchor;
+use bevy::ui_widgets::observe;
 use rand::RngExt;
 
-use crate::{
-    items::{
-        Item, ItemType,
-        equipment::{EquipmentSlot, Equippable},
-        prelude::UseEquipment,
-    },
-    prelude::*,
-};
+use super::equipment::prelude::DEFAULT_EQUIPMENT_POSES;
+use super::{Item, ItemKind};
+use crate::prelude::*;
 
 #[derive(Component)]
 struct HealingTome {
-    pub healing: (f32, f32),
+    min_healing: f32,
+    max_healing: f32,
 }
 
 pub fn tome_of_healing(sprites: &SpriteAssets) -> impl Bundle {
     (
         Name::new("Tome Of Healing"),
-        Item::new(355, ItemType::Tome),
-        Equippable::new(
-            EquipmentSlot::Offhand,
-            2.0,
-            &DEFAULT_EQUIPMENT_TRANSFORM_MAP,
-        ),
+        Item::new(355, ItemKind::Tome),
+        Equippable::new(EquipmentSlot::Offhand, 2.0, &DEFAULT_EQUIPMENT_POSES),
         ManaCost(40.0),
         HealingTome {
-            healing: (25.0, 50.0),
+            min_healing: 25.0,
+            max_healing: 50.0,
         },
         Sprite::from_image(sprites.tome_of_healing.clone()),
         observe(on_healing_tome_cast),
@@ -34,21 +29,20 @@ pub fn tome_of_healing(sprites: &SpriteAssets) -> impl Bundle {
 }
 
 fn on_healing_tome_cast(
-    healing_tome: On<UseEquipment>,
+    healing_tome: On<StartUsingEquipment>,
     mut commands: Commands,
     tome_query: Query<(&HealingTome, &ItemOf)>,
     sprites: Res<SpriteAssets>,
     sprite_layouts: Res<SpriteSheetLayouts>,
 ) -> Result {
-    let (tome, item_of) = tome_query.get(healing_tome.entity)?;
-
-    let health_to_add = rand::rng().random_range(tome.healing.0..tome.healing.1);
+    let (tome, _) = tome_query.get(healing_tome.item)?;
+    let health_to_add = rand::rng().random_range(tome.min_healing..tome.max_healing);
     commands.trigger(AttemptHeal {
-        entity: item_of.0,
+        entity: healing_tome.holder,
         amount: health_to_add,
     });
     commands
-        .entity(item_of.0)
+        .entity(healing_tome.holder)
         .with_child(heal_tome_vfx(sprites, sprite_layouts));
 
     Ok(())

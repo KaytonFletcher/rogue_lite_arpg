@@ -1,4 +1,5 @@
-use bevy::{ecs::spawn::SpawnIter, prelude::*};
+use bevy::ecs::spawn::SpawnIter;
+use bevy::prelude::*;
 
 use crate::prelude::*;
 
@@ -6,18 +7,19 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            update_exp_bar,
+            update_experience_bar,
             update_action_bar,
             update_cooldowns,
-            (update_mana_bar, update_lost_mana_bar).chain(),
-            (update_health_bar, update_lost_health_bar).chain(),
+            update_mana_bar,
+            update_lost_mana_bar,
+            update_health_bar,
+            update_lost_health_bar,
         )
+            .chain()
             .in_set(InGameSystems::HudOverlay),
     );
 
-    app.add_observer(on_equipment_use_add_cooldown_line);
-
-    app.add_observer(despawn_all::<RestartEvent, PlayerOverlay>);
+    app.add_observer(despawn_all::<Restart, PlayerOverlay>);
 }
 
 #[derive(Component)]
@@ -40,9 +42,9 @@ struct HealthLostBar {
 }
 
 #[derive(Component, Debug)]
-struct ExpBar;
+struct ExperienceBar;
 
-const EXP_COLOR: Color = Color::srgb(0.5, 0.0, 0.5);
+const EXPERIENCE_COLOR: Color = Color::srgb(0.5, 0.0, 0.5);
 const HEALTH_COLOR: Color = Color::srgb(1.0, 0.0, 0.0);
 const MANA_COLOR: Color = Color::srgb(0.0, 0.173, 0.878);
 const BAR_CHANGE_COLOR: Color = Color::srgb(1.0, 0.89, 0.41);
@@ -153,8 +155,10 @@ fn update_health_bar(
     let (mut health_lost_node, mut health_lost) = health_lost_bar.into_inner();
 
     if let Some(player_health) = player_health {
-        health_bar.width = get_amount_left_in_pixels(player_health.hp, player_health.max_hp);
-        health_lost_node.width = get_amount_lost_in_pixels(
+        health_bar.width = player_health.fraction().map_or(px(0.0), |fraction| {
+            px(fraction * player_health.max_hp * ATTRIBUTE_TO_PIXEL_SCALE)
+        });
+        health_lost_node.width = amount_lost_in_pixels(
             health_lost.previous_hp,
             player_health.hp,
             health_lost_node.width,
@@ -171,14 +175,16 @@ fn update_mana_bar(
 ) {
     let (mut mana_lost_node, mut mana_lost) = mana_lost_bar.into_inner();
 
-    mana_bar.width = get_amount_left_in_pixels(player_mana.current_mana, player_mana.max_mana);
-    mana_lost_node.width = get_amount_lost_in_pixels(
+    mana_bar.width = player_mana.fraction().map_or(px(0.0), |fraction| {
+        px(fraction * player_mana.max * ATTRIBUTE_TO_PIXEL_SCALE)
+    });
+    mana_lost_node.width = amount_lost_in_pixels(
         mana_lost.previous_mana,
-        player_mana.current_mana,
+        player_mana.current,
         mana_lost_node.width,
     );
 
-    mana_lost.previous_mana = player_mana.current_mana;
+    mana_lost.previous_mana = player_mana.current;
 }
 
 fn update_lost_mana_bar(mut mana_lost_node: Single<&mut Node, With<ManaLostBar>>, time: Res<Time>) {
@@ -195,22 +201,15 @@ fn update_lost_health_bar(
     time: Res<Time>,
 ) {
     let Val::Px(current_pixel) = health_lost_node.width else {
-        panic!("Non-pixel value for mana bar");
+        panic!("Non-pixel value for health bar");
     };
 
     let amount_to_remove = LOST_AMOUNT_SHRINK_RATE * time.delta_secs();
     health_lost_node.width = px((current_pixel - amount_to_remove).max(0.0));
 }
 
-// Gets length in px of bar representing amount of mana or health left
-fn get_amount_left_in_pixels(current_amount: f32, max_amount: f32) -> Val {
-    let max_bar_length = max_amount * ATTRIBUTE_TO_PIXEL_SCALE;
-    let ratio_remaining = current_amount / max_amount;
-    px(ratio_remaining * max_bar_length)
-}
-
 // Gets length in px of yellow bar representing amount of mana or health lost
-fn get_amount_lost_in_pixels(previous_amount: f32, current_amount: f32, pixel_width: Val) -> Val {
+fn amount_lost_in_pixels(previous_amount: f32, current_amount: f32, pixel_width: Val) -> Val {
     let pixel_change = (previous_amount - current_amount) * ATTRIBUTE_TO_PIXEL_SCALE;
 
     let Val::Px(current_pixels) = pixel_width else {
@@ -242,7 +241,7 @@ fn experience_bar() -> impl Bundle {
                 BackgroundColor::from(ATTRIBUTE_BACKGROUND_COLOR),
             ),
             (
-                ExpBar,
+                ExperienceBar,
                 Node {
                     width: px(0.0),
                     height: px(20.0),
@@ -250,7 +249,7 @@ fn experience_bar() -> impl Bundle {
                     left: px(0.0),
                     ..default()
                 },
-                BackgroundColor::from(EXP_COLOR),
+                BackgroundColor::from(EXPERIENCE_COLOR),
                 Children::spawn(SpawnIter((1..10).map(|i| (
                     Node {
                         position_type: PositionType::Absolute,
@@ -266,12 +265,12 @@ fn experience_bar() -> impl Bundle {
     )
 }
 
-fn update_exp_bar(
+fn update_experience_bar(
     player: Option<Single<&Player, Changed<Player>>>,
-    mut exp_bar: Single<&mut Node, With<ExpBar>>,
+    mut experience_bar: Single<&mut Node, With<ExperienceBar>>,
 ) {
     if let Some(player) = player {
-        exp_bar.width = px(400.0 * player.get_progress_to_next_level());
+        experience_bar.width = px(400.0 * player.progress_to_next_level());
     }
 }
 
@@ -346,18 +345,15 @@ fn update_action_bar(
     if let Some(player_inventory_result) = equipment_query {
         let (mainhand, offhand) = player_inventory_result.into_inner();
 
-        for (action_box, children) in action_box_query.iter() {
-            let equipment: Option<Entity> = match action_box.slot {
-                EquipmentSlot::Mainhand => mainhand.map(crate::prelude::Mainhand::get),
-                EquipmentSlot::Offhand => offhand.map(crate::prelude::Offhand::get),
-            };
+        for (action_box, children) in &action_box_query {
+            let equipment: Option<Entity> = action_box.slot.equipped(mainhand, offhand);
 
             if let Some(&image_entity) = children.first()
                 && let Ok(mut image_node) = image_query.get_mut(image_entity)
                 && let Some(equipped_entity) = equipment
                 && let Ok(item_sprite) = item_query.get(equipped_entity)
             {
-                let action_bar_sprite = get_action_bar_sprite(item_sprite);
+                let action_bar_sprite = action_bar_sprite(item_sprite);
 
                 image_node.image = action_bar_sprite.image.clone();
 
@@ -374,21 +370,17 @@ fn update_action_bar(
     }
 }
 
-#[derive(EntityEvent)]
-pub(super) struct PlayerEquipmentUsed {
-    pub entity: Entity,
-}
-
-fn on_equipment_use_add_cooldown_line(
-    equipment_used: On<PlayerEquipmentUsed>,
+/// Adds a cooldown indicator to the action box for the used slot.
+pub(super) fn on_equipment_use_succeeded(
+    equipment_used: On<EquipmentUseSucceeded>,
     mut commands: Commands,
     action_box_query: Query<(Entity, &ActionBox)>,
     equipment_query: Query<&Equippable, With<Equipped>>,
 ) {
-    if let Ok(equipmemnt) = equipment_query.get(equipment_used.entity)
+    if let Ok(equippable) = equipment_query.get(equipment_used.item)
         && let Some((box_entity, _)) = action_box_query
             .iter()
-            .find(|(_, action_box)| action_box.slot == equipmemnt.slot)
+            .find(|(_, action_box)| action_box.slot == equipment_used.slot)
     {
         commands.entity(box_entity).with_children(|parent| {
             parent.spawn((
@@ -401,7 +393,7 @@ fn on_equipment_use_add_cooldown_line(
                     top: px(0.0),
                     ..default()
                 },
-                Lifespan::new(equipmemnt.use_rate.remaining_secs()),
+                Lifespan::new(equippable.cooldown.remaining_secs()),
                 BackgroundColor::from(COOLDOWN_LINE_COLOR),
             ));
         });
@@ -439,7 +431,7 @@ fn update_cooldowns(mut cooldown_query: Query<(&mut Node, &Lifespan), With<Coold
     }
 }
 
-fn get_action_bar_sprite(sprite: &Sprite) -> Sprite {
+fn action_bar_sprite(sprite: &Sprite) -> Sprite {
     match &sprite.texture_atlas {
         Some(atlas) => Sprite {
             image: sprite.image.clone(),

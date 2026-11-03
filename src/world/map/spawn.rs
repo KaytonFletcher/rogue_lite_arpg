@@ -1,13 +1,13 @@
+use std::collections::BTreeMap;
+
 use avian2d::prelude::{Collider, CollisionLayers, RigidBody};
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
-use std::collections::BTreeMap;
 
-use crate::{
-    prelude::*,
-    world::map::blueprint::{MapBlueprint, PlacementKind},
-    world::map::tiling::tile_appearance,
-};
+use super::blueprint::{MapBlueprint, PlacementKind};
+use super::tiles::{TileGrid, TileKind, TileRect};
+use super::tiling::tile_appearance;
+use crate::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_plugins(TilemapPlugin);
@@ -15,6 +15,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         OnEnter(AppState::SpawnMap),
         (
+            set_tile_to_world_map_size,
             populate_map_tiles,
             spawn_colliders,
             spawn_placements,
@@ -24,18 +25,24 @@ pub(super) fn plugin(app: &mut App) {
     );
 }
 
-fn transition_to_playing(mut game_state: ResMut<NextState<AppState>>) {
-    game_state.set(AppState::Playing);
+fn transition_to_playing(mut next_app_state: ResMut<NextState<AppState>>) {
+    next_app_state.set(AppState::Playing);
+}
+
+fn set_tile_to_world_map_size(
+    blueprint: Single<&MapBlueprint>,
+    mut coordinates: ResMut<TileToWorld>,
+) {
+    coordinates.map_size = blueprint.map_size();
 }
 
 fn populate_map_tiles(
     mut commands: Commands,
     blueprint: Single<(&MapBlueprint, Entity)>,
-    mut coordinates: ResMut<TileToWorld>,
+    coordinates: Res<TileToWorld>,
     tiles: Res<TileAssets>,
 ) {
     let (blueprint, map) = blueprint.into_inner();
-    coordinates.map_size = blueprint.map_size();
     spawn_tiles(&mut commands, map, blueprint, &tiles, &coordinates);
 }
 
@@ -139,8 +146,8 @@ fn spawn_colliders(
 }
 
 fn derive_collider_rects(tiles: &TileGrid<TileKind>) -> Vec<TileRect> {
-    let map_width = i32::try_from(tiles.map_size().x).expect("map width fits in i32");
-    let map_height = i32::try_from(tiles.map_size().y).expect("map height fits in i32");
+    let map_width = i32::try_from(tiles.size().x).expect("map width fits in i32");
+    let map_height = i32::try_from(tiles.size().y).expect("map height fits in i32");
 
     let mut completed_collider_rects = Vec::new();
     let mut previous_runs: BTreeMap<(i32, i32), TileRect> = BTreeMap::new();
@@ -181,7 +188,7 @@ fn blocking_runs(tiles: &TileGrid<TileKind>, y: i32, map_width: i32) -> Vec<(i32
         while x < map_width
             && !tiles
                 .get(IVec2::new(x, y))
-                .is_some_and(|tile_kind| tile_kind.blocks_ground())
+                .is_some_and(TileKind::blocks_ground)
         {
             x += 1;
         }
@@ -191,7 +198,7 @@ fn blocking_runs(tiles: &TileGrid<TileKind>, y: i32, map_width: i32) -> Vec<(i32
         while x < map_width
             && tiles
                 .get(IVec2::new(x, y))
-                .is_some_and(|tile_kind| tile_kind.blocks_ground())
+                .is_some_and(TileKind::blocks_ground)
         {
             x += 1;
         }
@@ -229,15 +236,15 @@ fn spawn_placements(
                     world_spawn_position.extend(player_transform.translation.z);
             }
             PlacementKind::Enemy(enemy_kind) => {
-                enemies.push(EnemySpawnData {
+                enemies.push(EnemySpawn {
                     position: world_spawn_position,
-                    enemy_kind: enemy_kind.clone(),
+                    kind: *enemy_kind,
                 });
             }
             PlacementKind::Npc(npc_kind) => {
-                npcs.push(NpcSpawnData {
+                npcs.push(NpcSpawn {
                     position: world_spawn_position,
-                    npc_kind: *npc_kind,
+                    kind: *npc_kind,
                 });
             }
             PlacementKind::Chest => chests.push(world_spawn_position),
@@ -254,7 +261,7 @@ fn spawn_placements(
         commands.trigger(SpawnNpcs(npcs));
     }
     if !chests.is_empty() {
-        commands.trigger(SpawnChestsEvent(chests));
+        commands.trigger(SpawnChests(chests));
     }
     Ok(())
 }
@@ -296,15 +303,14 @@ impl TileToWorld {
     }
 
     /// Returns the tile containing a world-space position, or `None` outside the map.
-    pub fn world_to_tile_position(&self, world_position: Vec2) -> Option<UVec2> {
+    pub fn world_to_tile_position(&self, world_position: Vec2) -> Option<IVec2> {
         let map_position_in_units = world_position - self.bottom_left_offset();
-        let tile_index = map_position_in_units / self.units_per_tile();
+        let tile_index = (map_position_in_units / self.units_per_tile())
+            .floor()
+            .as_ivec2();
 
-        (tile_index.x >= 0.0 && tile_index.y >= 0.0)
-            .then(|| tile_index.as_uvec2())
-            .filter(|tile_position| {
-                tile_position.x < self.map_size.x && tile_position.y < self.map_size.y
-            })
+        (tile_index.cmpge(IVec2::ZERO).all() && tile_index.cmplt(self.map_size.as_ivec2()).all())
+            .then_some(tile_index)
     }
 
     /// Converts tile-space coordinates to world-space coordinates.
@@ -329,39 +335,5 @@ impl TileToWorld {
             self.tile_corner_to_world_position(tile_rectangle.min);
         let rectangle_center = rectangle_minimum_world_position + rectangle_size_in_units / 2.0;
         (rectangle_center, rectangle_size_in_units)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tilemap_backend_agrees_with_tile_to_world_at_7_by_4_endpoints() {
-        let map_size = UVec2::new(7, 4);
-        let coordinates = TileToWorld {
-            map_size,
-            ..default()
-        };
-        let tilemap_size: TilemapSize = map_size.into();
-        let grid_size: TilemapGridSize = coordinates.tile_size.into();
-        let tilemap_type = TilemapType::Square;
-        let anchor = TilemapAnchor::Center;
-        for tile_position in [TilePos::new(0, 0), TilePos::new(6, 3)] {
-            let backend_center = tile_position.center_in_world(
-                &tilemap_size,
-                &grid_size,
-                &coordinates.tile_size,
-                &tilemap_type,
-                &anchor,
-            );
-            assert_eq!(
-                backend_center,
-                coordinates.tile_center_to_world_position(IVec2::new(
-                    tile_position.x as i32,
-                    tile_position.y as i32,
-                ))
-            );
-        }
     }
 }

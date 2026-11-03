@@ -1,22 +1,26 @@
 use avian2d::prelude::RigidBody;
 use bevy::prelude::*;
-
 use rand::{RngExt, rng};
 
-use crate::{
-    character::{Purse, player::PlayerStats},
-    prelude::*,
-};
+use super::Enemy;
+use crate::character::player::PlayerStats;
+use crate::prelude::*;
 
-use crate::prelude::GoldDrop;
-
-use super::{Enemy, Experience};
+/// Experience paid out when the player defeats this enemy. Scales with
+/// threat: the tanky warrior pays most, the fragile flying bat least.
+#[derive(Component, Clone, Copy, Debug, Deref, DerefMut)]
+pub struct Experience(pub f32);
 
 pub(super) fn on_enemy_defeated(
     defeated: On<Defeated>,
     mut commands: Commands,
     mut defeated_enemy_query: Query<
-        (&Experience, &Transform, Option<&Items>, Option<&Purse>),
+        (
+            Option<&Experience>,
+            &Transform,
+            Option<&Items>,
+            Option<&Purse>,
+        ),
         With<Enemy>,
     >,
     player_query: Single<(&PlayerStats, &mut Player)>,
@@ -28,8 +32,10 @@ pub(super) fn on_enemy_defeated(
         defeated_enemy_query.get_mut(defeated.entity)
     {
         let (player_stats, mut player) = player_query.into_inner();
-        //Give EXP to the player
-        player.current_experience += experience_to_gain.base_exp;
+
+        if let Some(experience_to_gain) = experience_to_gain {
+            player.experience += **experience_to_gain;
+        }
 
         if let Some(items) = items {
             for item_entity in items.iter() {
@@ -37,9 +43,7 @@ pub(super) fn on_enemy_defeated(
                 if let Ok(item_result) = item_query.get(item_entity) {
                     let roll = rng.random_range(0.0..1.0);
                     if roll > (1.0 - item_result.drop_rate) {
-                        commands.trigger(ItemDrop {
-                            entity: item_entity,
-                        });
+                        commands.trigger(DropItem { item: item_entity });
                     }
                 }
             }
@@ -48,7 +52,7 @@ pub(super) fn on_enemy_defeated(
         if let Some(purse) = purse {
             // Enemies drop their gold based on player luck
             if rng.random_range(0.0..1.0) < (0.1 + (player_stats.luck as f32 / 100.0)) {
-                commands.trigger(GoldDrop {
+                commands.trigger(DropGold {
                     location: transform.translation.truncate(),
                     amount: purse.amount,
                 });
@@ -58,7 +62,7 @@ pub(super) fn on_enemy_defeated(
         commands
             .entity(defeated.entity)
             .insert(Lifespan::new(2.0))
-            .remove::<RigidBody>()
+            .remove::<(RigidBody, Brain)>()
             .despawn_related::<Children>();
     }
 }
