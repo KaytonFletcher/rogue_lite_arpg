@@ -82,7 +82,7 @@ pub fn display_slot(icons: &GameIcons, context: DisplaySlotContext) -> impl Scen
             @width(EQUIP_SLOT_WIDTH)
             Pickable::IGNORE
             --
-            @text({context.value.to_string()}, SMALL_FONT_SIZE)
+            @text(context.value.to_string(), SMALL_FONT_SIZE)
             @width(VALUE_WIDTH)
             Pickable::IGNORE
         ]

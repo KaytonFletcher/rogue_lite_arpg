@@ -26,8 +26,8 @@ pub fn portal(sprites: &SpriteAssets, position: Vec2) -> impl Scene {
     let image = sprites.exit_door.clone();
     bsn! {
         Portal
-        ~Sprite::from_image(image)
-        Transform::from_translation({position.extend(ZLayer::OnGround.z())})
+        @sprite(image)
+        Transform::from_translation(position.extend(ZLayer::OnGround.z()))
     }
 }
 

@@ -23,7 +23,7 @@ pub fn tome_of_healing(sprites: &SpriteAssets) -> impl Scene {
             min_healing: 25.0,
             max_healing: 50.0,
         }}
-        ~Sprite::from_image(image)
+        @sprite(image)
         on(on_healing_tome_cast)
     }
 }
@@ -52,15 +52,8 @@ fn on_healing_tome_cast(
 
 /// A burst of healing light over the tome's holder.
 fn heal_tome_vfx(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl Scene {
-    let sprite = Sprite::from_atlas_image(
-        sprites.tome_of_healing_effect.clone(),
-        TextureAtlas {
-            layout: sprite_layouts.spell_effect.clone(),
-            index: 0,
-        },
-    );
     bsn! {
-        sprite
+        @atlas_sprite(sprites.tome_of_healing_effect.clone(), sprite_layouts.spell_effect.clone(), 0)
         Anchor(Vec2::new(0.0, 0.10))
         ~{AnimationIndices::OneShot(0..=9)}
         AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating))

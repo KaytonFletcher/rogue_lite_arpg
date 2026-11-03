@@ -34,7 +34,7 @@ fn spawn_inventory_menu(
                 --
                 @text("Right click to drop", BODY_FONT_SIZE)
                 --
-                @text({format!("Total coins: {}", purse.amount)}, BODY_FONT_SIZE)
+                @text(format!("Total coins: {}", purse.amount), BODY_FONT_SIZE)
                 --
                 @spacer()
                 --

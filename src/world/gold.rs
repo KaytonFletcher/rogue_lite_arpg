@@ -93,8 +93,8 @@ fn on_drop_gold(gold_drop: On<DropGold>, mut commands: Commands, sprites: Res<Sp
 fn gold(gold_image: Handle<Image>, value: u32, location: Vec2) -> impl Scene {
     bsn! {
         ~{Gold { value }}
-        ~Sprite::from_image(gold_image)
-        Transform::from_translation({location.extend(ZLayer::OnGround.z())})
+        @sprite(gold_image)
+        Transform::from_translation(location.extend(ZLayer::OnGround.z()))
         Children [
             Magnet
         ]

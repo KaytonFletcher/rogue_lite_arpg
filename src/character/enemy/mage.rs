@@ -223,20 +223,13 @@ fn mage_body(
     sprites: &SpriteAssets,
     sprite_layouts: &SpriteSheetLayouts,
 ) -> impl Scene {
-    let sprite = Sprite::from_atlas_image(
-        image,
-        TextureAtlas {
-            layout: sprite_layouts.enemy.clone(),
-            ..default()
-        },
-    );
     bsn! {
         ~Health::new(20.0)
         ground_sight_ray()
         YSort::from_offset(CHARACTER_FEET_POS_OFFSET)
         ~Mana::new(100.0, 10.0)
         enemy_wander()
-        sprite
+        @atlas_sprite(image, sprite_layouts.enemy.clone(), 0)
         Items [
             @health_potion(sprites)
         ]

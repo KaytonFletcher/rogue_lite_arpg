@@ -55,7 +55,7 @@ pub fn spawn_stats_shop_menu(
                 {rows}
             ]
             --
-            @text({format!("Available Progress Points: {points}")}, 32.0)
+            @text(format!("Available Progress Points: {points}"), 32.0)
         ]
     });
 }
@@ -77,7 +77,7 @@ fn stat_row(stat: Stat, stats: &PlayerStats, points: u32) -> impl Scene {
                 align_items: AlignItems::Center,
             }
             Children [
-                @text({format!("{stat:?}: {}", stat.value(stats))}, BODY_FONT_SIZE)
+                @text(format!("{stat:?}: {}", stat.value(stats)), BODY_FONT_SIZE)
                 --
                 @muted_text(stat.description(), CAPTION_FONT_SIZE)
             ]

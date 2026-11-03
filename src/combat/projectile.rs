@@ -74,13 +74,6 @@ pub fn fireball_with_speed(
     angle_offset: f32,
     speed: f32,
 ) -> impl Scene {
-    let sprite = Sprite::from_atlas_image(
-        sprites.fire_ball.clone(),
-        TextureAtlas {
-            layout: sprite_layouts.fireball.clone(),
-            index: 0,
-        },
-    );
     bsn! {
         Projectile {
             damage: Damage::Single(3.0),
@@ -88,8 +81,8 @@ pub fn fireball_with_speed(
             spawn_offset: 20.0,
             angle_offset,
         }
-        Lifespan::new({FIREBALL_RANGE / speed})
-        sprite
+        Lifespan::new(FIREBALL_RANGE / speed)
+        @atlas_sprite(sprites.fire_ball.clone(), sprite_layouts.fireball.clone(), 0)
         @point_light(Color::from(YELLOW_300), 1.4, 50.0, 5.0)
         ~Collider::circle(10.0)
         AnimationTimer(Timer::from_seconds(0.042, TimerMode::Repeating))
@@ -106,13 +99,6 @@ pub fn icebolt(
     sprite_layouts: &SpriteSheetLayouts,
     angle_offset: f32,
 ) -> impl Scene {
-    let sprite = Sprite::from_atlas_image(
-        sprites.ice_bolt.clone(),
-        TextureAtlas {
-            layout: sprite_layouts.ice_bolt.clone(),
-            index: 0,
-        },
-    );
     bsn! {
         Projectile {
             damage: Damage::Range {
@@ -123,7 +109,7 @@ pub fn icebolt(
             spawn_offset: 26.0,
             angle_offset,
         }
-        sprite
+        @atlas_sprite(sprites.ice_bolt.clone(), sprite_layouts.ice_bolt.clone(), 0)
         @point_light(Color::from(BLUE_400), 1.4, 80.0, 5.0)
         ~Collider::rectangle(40.0, 5.0)
         ~{AnimationIndices::Cycle((0..=2).cycle())}

@@ -48,7 +48,7 @@ fn health_change_text(origin: Vec3, entity_height: f32, amount: f32, color: Colo
         Text2d(formatted_amount)
         TextColor(color)
         Lifespan::new(0.4)
-        Transform::from_translation({origin + text_position})
+        Transform::from_translation(origin + text_position)
     }
 }
 

@@ -174,13 +174,6 @@ pub(super) fn spawn_bat(
 }
 
 fn bat(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl Scene {
-    let sprite = Sprite::from_atlas_image(
-        sprites.bat_enemy_sprite_sheet.clone(),
-        TextureAtlas {
-            layout: sprite_layouts.bat.clone(),
-            index: 0, // Down row; FacingDirection defaults to Down.
-        },
-    );
     bsn! {
         ~Kinematics::new(170.0)
         ~Health::new(15.0)
@@ -197,7 +190,7 @@ fn bat(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl Scen
         enemy_wander()
         ~Swoop::new(0.35, CAST_MAX_RANGE, 2.0)
         ~Bite::new(BITE_REACH, BITE_DAMAGE, BITE_COOLDOWN).with_life_steal(1.0)
-        sprite
+        @atlas_sprite(sprites.bat_enemy_sprite_sheet.clone(), sprite_layouts.bat.clone(), 0) // Down row; FacingDirection defaults to Down.
         ~AnimationSheet::bat()
         ~Breath::new(BAT_BREATH_PERIOD, CAST_MAX_RANGE)
         Projectiles [

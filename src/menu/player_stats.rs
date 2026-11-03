@@ -45,12 +45,12 @@ fn stat_row(stat: Stat, stats: &PlayerStats) -> impl Scene {
                 row_gap: px(4),
             }
             Children [
-                @text({format!("{stat:?}")}, BODY_FONT_SIZE)
+                @text(format!("{stat:?}"), BODY_FONT_SIZE)
                 --
                 @muted_text(stat.description(), CAPTION_FONT_SIZE)
             ]
             --
-            @text({format!("{}/99", stat.value(stats))}, BODY_FONT_SIZE)
+            @text(format!("{}/99", stat.value(stats)), BODY_FONT_SIZE)
         ]
     }
 }

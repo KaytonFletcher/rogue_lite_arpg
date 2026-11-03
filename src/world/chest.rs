@@ -51,16 +51,9 @@ fn chest(
     sprite_layouts: &SpriteSheetLayouts,
     spawn_position: Vec2,
 ) -> impl Scene {
-    let sprite = Sprite::from_atlas_image(
-        sprites.chests_sprite_sheet.clone(),
-        TextureAtlas {
-            layout: sprite_layouts.chest.clone(),
-            index: 0,
-        },
-    );
     bsn! {
         Chest
-        sprite
+        @atlas_sprite(sprites.chests_sprite_sheet.clone(), sprite_layouts.chest.clone(), 0)
         Anchor(Vec2::new(-0.18, 0.0))
         ~{AnimationIndices::OneShot(0..=8)}
         Transform {

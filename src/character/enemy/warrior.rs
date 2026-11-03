@@ -177,13 +177,6 @@ pub(super) fn spawn_warrior(
 }
 
 fn warrior(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl Scene {
-    let sprite = Sprite::from_atlas_image(
-        sprites.warrior_enemy_sprite_sheet.clone(),
-        TextureAtlas {
-            layout: sprite_layouts.enemy.clone(),
-            ..default()
-        },
-    );
     bsn! {
         ~Kinematics::new(200.0)
         ~Health::new(40.0)
@@ -194,7 +187,7 @@ fn warrior(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl 
         ~Dash::kite(0.8, Interval::new(6.0 * TILE_SIZE as f32, 8.0 * TILE_SIZE as f32))
         ~Heal::new(HEAL_COOLDOWN)
         enemy_wander()
-        sprite
+        @atlas_sprite(sprites.warrior_enemy_sprite_sheet.clone(), sprite_layouts.enemy.clone(), 0)
         Items [
             @health_potion(sprites)
         ]

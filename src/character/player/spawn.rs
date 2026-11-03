@@ -21,13 +21,6 @@ pub(super) fn spawn_player(
         .id();
 
     let stats = game_progress.base_stats;
-    let sprite = Sprite::from_atlas_image(
-        sprites.player_sprite_sheet.clone(),
-        TextureAtlas {
-            layout: sprite_layouts.player.clone(),
-            ..default()
-        },
-    );
 
     let player = commands
         .spawn_scene(bsn! {
@@ -37,7 +30,7 @@ pub(super) fn spawn_player(
             @player_actions()
             ~Mana::new(100.0, 10.0)
             stats
-            sprite
+            @atlas_sprite(sprites.player_sprite_sheet.clone(), sprite_layouts.player.clone(), 0)
             TargetInfo
             on(death::on_player_defeated)
             on(overlay::on_equipment_use_succeeded)

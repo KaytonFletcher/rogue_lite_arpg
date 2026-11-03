@@ -158,7 +158,7 @@ fn spawn_enemy_ai_labels(
             TextColor(Color::WHITE)
             // Grows upward, so a long score trace stays clear of the enemy.
             Anchor::BOTTOM_CENTER
-            Transform::from_xyz(0.0, AI_LABEL_HEIGHT, {ZLayer::AboveSprite.z()})
+            Transform::from_xyz(0.0, AI_LABEL_HEIGHT, ZLayer::AboveSprite.z())
             ChildOf(enemy)
         });
     }

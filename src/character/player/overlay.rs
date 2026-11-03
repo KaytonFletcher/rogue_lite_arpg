@@ -208,7 +208,7 @@ fn experience_bar() -> impl Scene {
             bsn! {
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px({i as f32 * 40.0}),
+                    left: px(i as f32 * 40.0),
                     width: px(2),
                     height: px(20),
                 }

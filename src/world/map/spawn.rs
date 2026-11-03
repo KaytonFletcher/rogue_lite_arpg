@@ -136,7 +136,7 @@ fn spawn_colliders(
             MapCollider
             ~RigidBody::Static
             ~Collider::rectangle(size.x, size.y)
-            Transform::from_xyz(position.x, position.y, {ZLayer::OnGround.z()})
+            Transform::from_xyz(position.x, position.y, ZLayer::OnGround.z())
             ~CollisionLayers::new(
                 GameCollisionLayer::HighObstacle,
                 GameCollisionLayer::HIGH_OBSTACLE_FILTERS,

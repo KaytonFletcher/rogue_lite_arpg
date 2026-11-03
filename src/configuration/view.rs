@@ -2,6 +2,7 @@ use bevy::camera::ScalingMode;
 use bevy::color::palettes::tailwind::BLUE_300;
 #[cfg(feature = "dev")]
 use bevy::color::palettes::{basic::RED, css::BLUE, tailwind::PURPLE_700};
+use bevy::image::TextureAtlasTemplate;
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_firefly::prelude::{Falloff, FireflyConfig, LightCore, LightmapSize, PointLight2d};
@@ -254,6 +255,28 @@ pub(super) fn draw_camera_debug_gizmos(
         .resolution(64);
 }
 
+/// A sprite showing all of `image`.
+pub fn sprite(image: Handle<Image>) -> impl Scene {
+    bsn! {
+        Sprite { image }
+    }
+}
+
+/// A sprite showing frame `index` of a sheet `image` cut up by `layout`.
+pub fn atlas_sprite(
+    image: Handle<Image>,
+    layout: Handle<TextureAtlasLayout>,
+    index: usize,
+) -> impl Scene {
+    let atlas = TextureAtlasTemplate {
+        layout: layout.into(),
+        index,
+    };
+    bsn! {
+        Sprite { image, texture_atlas: atlas }
+    }
+}
+
 /// A soft ellipse under a character's feet, `y_offset` below its center.
 pub fn shadow(shadows: &Shadows, y_offset: f32) -> impl Scene {
     let mesh = shadows.character.handle.clone();
@@ -261,7 +284,7 @@ pub fn shadow(shadows: &Shadows, y_offset: f32) -> impl Scene {
     bsn! {
         Mesh2d(mesh)
         MeshMaterial2d<ColorMaterial>(material)
-        Transform::from_xyz(0.0, y_offset, {ZLayer::SpriteBackground.z()})
+        Transform::from_xyz(0.0, y_offset, ZLayer::SpriteBackground.z())
     }
 }
 

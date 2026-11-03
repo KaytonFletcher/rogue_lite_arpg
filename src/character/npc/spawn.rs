@@ -104,7 +104,7 @@ fn base_npc(
         ~HomeArea::new(spawn_position, WANDER_RADIUS, TILE_SIZE as f32 / 2.0)
         ~Kinematics::new(100.0)
         ~Health::new(1000.0)
-        Transform::from_translation({spawn_position.extend(ZLayer::OnGround.z())})
+        Transform::from_translation(spawn_position.extend(ZLayer::OnGround.z()))
         Children [
             @shadow(shadows, CHARACTER_FEET_POS_OFFSET - 4.0)
             --
@@ -120,14 +120,7 @@ fn base_npc(
 
 /// A villager drawn from the shared enemy sheet layout.
 fn villager_sprite(image: Handle<Image>, sprite_layouts: &SpriteSheetLayouts) -> impl Scene {
-    let sprite = Sprite::from_atlas_image(
-        image,
-        TextureAtlas {
-            layout: sprite_layouts.enemy.clone(),
-            ..default()
-        },
-    );
     bsn! {
-        sprite
+        @atlas_sprite(image, sprite_layouts.enemy.clone(), 0)
     }
 }

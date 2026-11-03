@@ -55,7 +55,7 @@ fn ring_effect() -> impl Scene {
         // Each ring owns its material, so fading one leaves the others alone.
         Mesh2d(asset_value(Circle::new(LEVEL_UP_RING_START_RADIUS)))
         MeshMaterial2d<ColorMaterial>(asset_value(Color::srgba(1.0, 0.9, 0.0, 0.7)))
-        Transform::from_translation({Vec2::ZERO.extend(ZLayer::BehindSprite.z())})
+        Transform::from_translation(Vec2::ZERO.extend(ZLayer::BehindSprite.z()))
         Lifespan::new(LEVEL_UP_ANIMATION_DURATION)
     }
 }
@@ -67,7 +67,7 @@ fn level_up_text() -> impl Scene {
         Text2d("Level up!")
         TextFont { font_size: FontSize::Px(24.0) }
         TextColor(Color::srgb(1.0, 0.84, 0.0))
-        Transform::from_xyz(0.0, 60.0, {ZLayer::BehindSprite.z()})
+        Transform::from_xyz(0.0, 60.0, ZLayer::BehindSprite.z())
         Lifespan::new(LEVEL_UP_ANIMATION_DURATION)
     }
 }
@@ -81,7 +81,7 @@ fn animate_level_up(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     // Animate ring effect
-    for (mut transform, mut material, duration) in &mut effect_query {
+    for (mut transform, material, duration) in &mut effect_query {
         let progress = duration.0.fraction();
 
         // Scale up and rotate
