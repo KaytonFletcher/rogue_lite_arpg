@@ -9,6 +9,13 @@ pub struct Mana {
     pub regen_rate: f32,
 }
 
+/// A full pool of 100 that refills 10 per second, what every caster starts with.
+impl Default for Mana {
+    fn default() -> Self {
+        Self::new(100.0, 10.0)
+    }
+}
+
 impl Mana {
     pub fn new(max: f32, regen_rate: f32) -> Self {
         Self {

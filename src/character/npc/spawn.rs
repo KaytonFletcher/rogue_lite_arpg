@@ -103,7 +103,7 @@ fn base_npc(
         ~Wander::new(Interval::new(1.0, 4.0), Interval::new(1.0, 2.5))
         ~HomeArea::new(spawn_position, WANDER_RADIUS, TILE_SIZE as f32 / 2.0)
         ~Kinematics::new(100.0)
-        ~Health::new(1000.0)
+        Health::new(1000.0)
         Transform::from_translation(spawn_position.extend(ZLayer::OnGround.z()))
         Children [
             @shadow(shadows, CHARACTER_FEET_POS_OFFSET - 4.0)

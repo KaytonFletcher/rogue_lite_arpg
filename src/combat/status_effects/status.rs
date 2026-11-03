@@ -21,7 +21,7 @@ pub(super) enum StatusKind {
     Slow,
 }
 
-#[derive(Component, Clone)]
+#[derive(Component, Clone, FromTemplate)]
 #[relationship(relationship_target = StatusVisualEffects)]
 pub(super) struct StatusVfxOf(pub(super) Entity);
 

@@ -84,7 +84,7 @@ pub fn fireball_with_speed(
         Lifespan::new(FIREBALL_RANGE / speed)
         @atlas_sprite(sprites.fire_ball.clone(), sprite_layouts.fireball.clone(), 0)
         @point_light(Color::from(YELLOW_300), 1.4, 50.0, 5.0)
-        ~Collider::circle(10.0)
+        Collider::circle(10.0)
         AnimationTimer(Timer::from_seconds(0.042, TimerMode::Repeating))
         Knockback(5.0)
         Effects [
@@ -111,7 +111,7 @@ pub fn icebolt(
         }
         @atlas_sprite(sprites.ice_bolt.clone(), sprite_layouts.ice_bolt.clone(), 0)
         @point_light(Color::from(BLUE_400), 1.4, 80.0, 5.0)
-        ~Collider::rectangle(40.0, 5.0)
+        Collider::rectangle(40.0, 5.0)
         ~{AnimationIndices::Cycle((0..=2).cycle())}
         AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating))
         Knockback(5.0)

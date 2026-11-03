@@ -7,8 +7,8 @@ use crate::prelude::*;
 pub fn physical_collider() -> impl Scene {
     bsn! {
         Transform::from_xyz(0.0, CHARACTER_FEET_POS_OFFSET, 0.0)
-        ~Collider::circle(10.0)
-        ~CollisionLayers::new(
+        Collider::circle(10.0)
+        CollisionLayers::new(
             [GameCollisionLayer::Grounded],
             [
                 GameCollisionLayer::Grounded,

@@ -176,7 +176,7 @@ pub(super) fn spawn_bat(
 fn bat(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl Scene {
     bsn! {
         ~Kinematics::new(170.0)
-        ~Health::new(15.0)
+        Health::new(15.0)
         Experience(6.0)
         // Bats fly high: longer reach, and high obstacles never block the
         // ray, so a bat holds its target through cover.
@@ -186,7 +186,7 @@ fn bat(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl Scen
         )
         YSort::from_offset(BAT_FEET_POS_OFFSET)
         ~{TurnRate(BAT_TURN_RATE)}
-        ~Orbit::new().with_max_distance_offset(BAT_ORBIT_MAX_DISTANCE_OFFSET)
+        Orbit::new().with_max_distance_offset(BAT_ORBIT_MAX_DISTANCE_OFFSET)
         enemy_wander()
         ~Swoop::new(0.35, CAST_MAX_RANGE, 2.0)
         ~Bite::new(BITE_REACH, BITE_DAMAGE, BITE_COOLDOWN).with_life_steal(1.0)
@@ -206,8 +206,8 @@ fn bat_children(shadows: &Shadows) -> impl Scene {
             @shadow(shadows, BAT_FEET_POS_OFFSET - BAT_SHADOW_DROP)
             --
             Transform::from_xyz(0.0, BAT_BODY_OFFSET, 0.0)
-            ~Collider::circle(8.0)
-            ~CollisionLayers::new([GameCollisionLayer::InAir], [GameCollisionLayer::HighObstacle])
+            Collider::circle(8.0)
+            CollisionLayers::new([GameCollisionLayer::InAir], [GameCollisionLayer::HighObstacle])
             --
             @hurtbox_at(Vec2::new(24.0, 24.0), GameCollisionLayer::EnemyHurtBox, BAT_HURTBOX_OFFSET)
         ]

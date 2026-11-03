@@ -134,10 +134,10 @@ fn spawn_colliders(
 
         commands.spawn_scene(bsn! {
             MapCollider
-            ~RigidBody::Static
-            ~Collider::rectangle(size.x, size.y)
+            RigidBody::Static
+            Collider::rectangle(size.x, size.y)
             Transform::from_xyz(position.x, position.y, ZLayer::OnGround.z())
-            ~CollisionLayers::new(
+            CollisionLayers::new(
                 GameCollisionLayer::HighObstacle,
                 GameCollisionLayer::HIGH_OBSTACLE_FILTERS,
             )

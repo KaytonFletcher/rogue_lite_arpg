@@ -28,7 +28,7 @@ pub(super) fn spawn_player(
             Player
             @pause_actions()
             @player_actions()
-            ~Mana::new(100.0, 10.0)
+            Mana::new(100.0, 10.0)
             stats
             @atlas_sprite(sprites.player_sprite_sheet.clone(), sprite_layouts.player.clone(), 0)
             TargetInfo
@@ -66,7 +66,7 @@ pub(super) fn spawn_player(
                 --
                 PlayerInteractionRadius
                 Transform::from_xyz(0.0, CHARACTER_FEET_POS_OFFSET, 0.0)
-                ~CollisionLayers::new(
+                CollisionLayers::new(
                     [GameCollisionLayer::PlayerInteractionRadius],
                     [GameCollisionLayer::Interaction],
                 )

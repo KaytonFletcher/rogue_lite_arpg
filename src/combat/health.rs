@@ -18,6 +18,13 @@ pub struct Health {
     pub max_hp: f32,
 }
 
+/// Full health out of 100, the player's starting pool.
+impl Default for Health {
+    fn default() -> Self {
+        Self::new(100.0)
+    }
+}
+
 impl Health {
     pub fn new(max_hp: f32) -> Self {
         Self { hp: max_hp, max_hp }

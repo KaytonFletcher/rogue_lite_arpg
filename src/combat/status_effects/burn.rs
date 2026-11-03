@@ -71,7 +71,7 @@ fn burn_vfx(
     status: Entity,
 ) -> impl Scene {
     bsn! {
-        ~{StatusVfxOf(status)}
+        StatusVfxOf(status)
         @atlas_sprite(sprites.flame.clone(), sprite_layouts.flame_vfx.clone(), 0)
         Transform {
             translation: Vec3::new(0.0, CHARACTER_FEET_POS_OFFSET + 8.0, ZLayer::SpriteForeground.z()),

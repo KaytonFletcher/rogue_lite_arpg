@@ -224,10 +224,10 @@ fn mage_body(
     sprite_layouts: &SpriteSheetLayouts,
 ) -> impl Scene {
     bsn! {
-        ~Health::new(20.0)
+        Health::new(20.0)
         ground_sight_ray()
         YSort::from_offset(CHARACTER_FEET_POS_OFFSET)
-        ~Mana::new(100.0, 10.0)
+        Mana::new(100.0, 10.0)
         enemy_wander()
         @atlas_sprite(image, sprite_layouts.enemy.clone(), 0)
         Items [
@@ -262,6 +262,6 @@ fn fire_mage(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> imp
             2.2,
             CAST_MIN_RANGE - 10.0,
         )
-        ~Orbit::new()
+        Orbit::new()
     }
 }

@@ -72,9 +72,9 @@ pub fn hurtbox(size: Vec2, membership: GameCollisionLayer) -> impl Scene {
 pub fn hurtbox_at(size: Vec2, membership: GameCollisionLayer, y_offset: f32) -> impl Scene {
     bsn! {
         HurtBox
-        ~Collider::rectangle(size.x, size.y)
+        Collider::rectangle(size.x, size.y)
         Transform::from_xyz(0.0, y_offset, 0.0)
-        ~CollisionLayers::new(membership, [GameCollisionLayer::HitBox])
+        CollisionLayers::new(membership, [GameCollisionLayer::HitBox])
     }
 }
 

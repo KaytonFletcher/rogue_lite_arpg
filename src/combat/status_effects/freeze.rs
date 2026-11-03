@@ -28,7 +28,7 @@ fn grounded_ice_vfx(sprites: &SpriteAssets, status: Entity) -> impl Scene {
     let image = sprites.grounded_ice.clone();
     bsn! {
         @sprite(image)
-        ~{StatusVfxOf(status)}
+        StatusVfxOf(status)
         @point_light(Color::from(BLUE_400), 1.4, 80.0, 5.0)
         Transform {
             translation: Vec3::new(0.0, CHARACTER_FEET_POS_OFFSET + 16.0, ZLayer::SpriteForeground.z()),
