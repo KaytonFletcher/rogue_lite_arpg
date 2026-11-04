@@ -254,9 +254,14 @@ pub const GOLD_BUTTON_COLORS: ButtonColors = ButtonColors {
 
 /// A headless [`Button`] with a centered label that recolors itself as it's hovered and pressed.
 /// React to clicks with `on(|_: On<Activate>, ..| ..)` at the call site.
+///
+/// The label doubles as the screen reader name. Headless buttons don't derive one from their
+/// text, so patch a more descriptive [`AccessibleLabel`] on top when the visible label is terse.
 pub fn button(label: &str, font_size: f32, text_color: Color, colors: ButtonColors) -> impl Scene {
+    let accessible_label = AccessibleLabel::new(label);
     bsn! {
         Button
+        accessible_label
         Hovered
         colors
         BackgroundColor({colors.idle})

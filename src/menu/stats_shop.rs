@@ -99,9 +99,16 @@ fn stat_shop_button(stat: Stat, change: StatChange, points: u32) -> impl Scene {
         hovered: highlight,
         pressed: highlight,
     };
+    // "+" and "-" say nothing to a screen reader, so name the stat and direction.
+    let verb = match change {
+        StatChange::Increase => "Increase",
+        StatChange::Decrease => "Decrease",
+    };
+    let accessible_label = AccessibleLabel::new(format!("{verb} {stat:?}"));
 
     bsn! {
         @button(label, BODY_FONT_SIZE, Color::WHITE, colors)
+        accessible_label
         ~{StatShopButton { stat, change }}
         Node {
             width: px(30),
@@ -136,11 +143,11 @@ fn on_stat_button_activated(
 
 pub fn on_change_stat(
     trigger: On<ChangeStat>,
-    mut player_stats: Query<&mut PlayerStats>,
+    player_stats: Single<&mut PlayerStats>,
     mut game_progress: ResMut<GameProgress>,
     mut commands: Commands,
 ) {
-    let mut stats = player_stats.single_mut().expect("Player stats not found");
+    let mut stats = player_stats.into_inner();
 
     match (trigger.stat, trigger.change) {
         (stat, StatChange::Increase) if game_progress.progress_points > 0 => {
@@ -175,7 +182,6 @@ pub fn on_change_stat(
 pub fn on_update_stats_ui(
     _: On<UpdateStatsUi>,
     mut commands: Commands,
-    stats_menu_query: Query<Entity, With<StatShopMenu>>,
     player_stats_query: Single<&PlayerStats>,
     mut game_progress: ResMut<GameProgress>,
 ) {
@@ -184,9 +190,7 @@ pub fn on_update_stats_ui(
     game_progress.base_stats = player_stats;
 
     // Despawn existing menu
-    for entity in &stats_menu_query {
-        commands.entity(entity).despawn();
-    }
+    commands.despawn_all::<With<StatShopMenu>>();
 
     // Respawn with updated values
     spawn_stats_shop_menu(commands, player_stats_query, game_progress);
