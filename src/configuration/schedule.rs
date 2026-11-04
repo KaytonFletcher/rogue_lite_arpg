@@ -55,10 +55,12 @@ pub(super) fn plugin(app: &mut App) {
             .in_set(InGameSystems::Simulation),
     );
 
+    // Vfx phases only order through the components they share (animation state, atlas index,
+    // sprite color), so a weak chain keeps those orderings and lets unrelated effects overlap.
     app.configure_sets(
         Update,
         (VfxSystems::Select, VfxSystems::Animate, VfxSystems::Tint)
-            .chain()
+            .chain_weak()
             .in_set(InGameSystems::Vfx),
     );
 

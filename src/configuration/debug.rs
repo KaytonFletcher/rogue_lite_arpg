@@ -33,10 +33,11 @@ pub(super) fn plugin(app: &mut App) {
             ..default()
         },
     )
-    // Enable system ambiguity detection
+    // Enable system ambiguity detection, and optionally shuffle unordered systems
     .edit_schedule(Update, |schedule| {
         schedule.set_build_settings(ScheduleBuildSettings {
             ambiguity_detection: LogLevel::Warn,
+            shuffle_seed: schedule_shuffle_seed(),
             ..default()
         });
     })
@@ -71,6 +72,17 @@ pub(super) fn plugin(app: &mut App) {
         (FpsOverlaySystems::Customize, FpsOverlaySystems::UpdateText)
             .ambiguous_with(InGameSystems::HudOverlay),
     );
+}
+
+/// Reads `SCHEDULE_SHUFFLE_SEED` so a run can randomize the order of systems that have no
+/// explicit ordering. A bug that only appears under some seeds points at a missing `.before()` /
+/// `.after()`; rerun with the logged seed to reproduce it.
+///
+/// Web builds have no environment, so this is always `None` there.
+fn schedule_shuffle_seed() -> Option<u64> {
+    let seed = std::env::var("SCHEDULE_SHUFFLE_SEED").ok()?.parse().ok()?;
+    info!("Shuffling the Update schedule with seed {seed}");
+    Some(seed)
 }
 
 #[derive(Resource)]
