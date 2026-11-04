@@ -489,7 +489,6 @@ dependencies = [
 name = "baba_yaga"
 version = "0.1.0"
 dependencies = [
- "accesskit",
  "avian2d",
  "bevy",
  "bevy_asset_loader",
