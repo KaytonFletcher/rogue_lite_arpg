@@ -35,7 +35,6 @@ pub(super) fn plugin(app: &mut App) {
 #[derive(SystemParam)]
 pub struct NextMap<'w, 's> {
     commands: Commands<'w, 's>,
-    previous_maps: Query<'w, 's, Entity, With<MapBlueprint>>,
     next_app_state: ResMut<'w, NextState<AppState>>,
     catalog: Res<'w, RecipeCatalog>,
     root_rng: ResMut<'w, MapRng>,
@@ -47,12 +46,10 @@ impl NextMap<'_, '_> {
         let (recipe, seed) = self.catalog.resolve(request, &mut self.root_rng)?;
         info!("Generating map {} with seed {seed}", recipe.name);
         let blueprint = build_from_recipe(recipe, seed, &self.catalog.structures)
-            .map_err(|error| format!("map {} seed {seed}: {error}", recipe.name))?;
+            .with_context(|| format!("map {} seed {seed}", recipe.name))?;
 
         // Despawn every map, so a stray duplicate cleans itself up instead of wedging `set`.
-        for previous_map in &self.previous_maps {
-            self.commands.entity(previous_map).despawn();
-        }
+        self.commands.despawn_all::<With<MapBlueprint>>();
         self.commands.spawn(blueprint);
         self.next_app_state.set(AppState::SpawnMap);
         Ok(())

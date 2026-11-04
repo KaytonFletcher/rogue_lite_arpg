@@ -40,15 +40,11 @@ fn despawn_expired_entities(
     }
 }
 
-/// Despawn all entities with the specific component.
-pub fn despawn_all<T: Event, C: Component>(
-    _: On<T>,
-    mut commands: Commands,
-    query: Query<Entity, With<C>>,
-) {
-    for entity in &query {
-        commands.entity(entity).despawn();
-    }
+/// Observer that despawns every entity with component `C` whenever `T` is triggered.
+///
+/// Uses the batched [`Commands::despawn_all`] rather than one despawn command per entity.
+pub fn despawn_all<T: Event, C: Component>(_: On<T>, mut commands: Commands) {
+    commands.despawn_all::<With<C>>();
 }
 
 /// A pending component removal, held as a child so several can wait on one entity at once.

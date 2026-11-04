@@ -33,10 +33,11 @@ pub(super) fn plugin(app: &mut App) {
             ..default()
         },
     )
-    // Enable system ambiguity detection
+    // Enable system ambiguity detection, and optionally shuffle unordered systems
     .edit_schedule(Update, |schedule| {
         schedule.set_build_settings(ScheduleBuildSettings {
             ambiguity_detection: LogLevel::Warn,
+            shuffle_seed: schedule_shuffle_seed(),
             ..default()
         });
     })
@@ -71,6 +72,17 @@ pub(super) fn plugin(app: &mut App) {
         (FpsOverlaySystems::Customize, FpsOverlaySystems::UpdateText)
             .ambiguous_with(InGameSystems::HudOverlay),
     );
+}
+
+/// Reads `SCHEDULE_SHUFFLE_SEED` so a run can randomize the order of systems that have no
+/// explicit ordering. A bug that only appears under some seeds points at a missing `.before()` /
+/// `.after()`; rerun with the logged seed to reproduce it.
+///
+/// Web builds have no environment, so this is always `None` there.
+fn schedule_shuffle_seed() -> Option<u64> {
+    let seed = std::env::var("SCHEDULE_SHUFFLE_SEED").ok()?.parse().ok()?;
+    info!("Shuffling the Update schedule with seed {seed}");
+    Some(seed)
 }
 
 #[derive(Resource)]
@@ -130,7 +142,7 @@ fn debug_target_lines(
 }
 
 /// Marker on the floating [`Text2d`] above a debug-tracked enemy.
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct EnemyAiLabel;
 
 /// Marker on enemies that already have a label child (and a [`ScoreTrace`]),
@@ -151,18 +163,16 @@ fn spawn_enemy_ai_labels(
         commands
             .entity(enemy)
             .insert((HasAiLabel, ScoreTrace::default()));
-        commands.entity(enemy).with_child((
-            EnemyAiLabel,
-            Text2d::new("..."),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor::from(Color::WHITE),
+        commands.spawn_scene(bsn! {
+            EnemyAiLabel
+            Text2d("...")
+            TextFont { font_size: FontSize::Px(12.0) }
+            TextColor(Color::WHITE)
             // Grows upward, so a long score trace stays clear of the enemy.
-            Anchor::BOTTOM_CENTER,
-            Transform::from_translation(Vec3::new(0.0, AI_LABEL_HEIGHT, ZLayer::AboveSprite.z())),
-        ));
+            Anchor::BOTTOM_CENTER
+            Transform::from_xyz(0.0, AI_LABEL_HEIGHT, ZLayer::AboveSprite.z())
+            ChildOf(enemy)
+        });
     }
 }
 

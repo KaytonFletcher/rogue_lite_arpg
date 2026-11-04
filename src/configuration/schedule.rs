@@ -1,6 +1,6 @@
 use avian2d::prelude::{Physics, PhysicsTime};
 use bevy::prelude::*;
-use bevy_asset_loader::loading_state::LoadingStateSet;
+use bevy_asset_loader::loading_state::LoadingStateSystems;
 
 pub(super) fn plugin(app: &mut App) {
     // initialize states
@@ -16,7 +16,8 @@ pub(super) fn plugin(app: &mut App) {
             MainSystems::Shared,
         )
             .chain()
-            .after(LoadingStateSet(AppState::AssetLoading)), // appease the system ordering gods
+            // appease the system ordering gods
+            .after(LoadingStateSystems(AppState::AssetLoading)),
     );
 
     // Must order per-schedule, so same as above but for FixedUpdate systems
@@ -54,10 +55,12 @@ pub(super) fn plugin(app: &mut App) {
             .in_set(InGameSystems::Simulation),
     );
 
+    // Vfx phases only order through the components they share (animation state, atlas index,
+    // sprite color), so a weak chain keeps those orderings and lets unrelated effects overlap.
     app.configure_sets(
         Update,
         (VfxSystems::Select, VfxSystems::Animate, VfxSystems::Tint)
-            .chain()
+            .chain_weak()
             .in_set(InGameSystems::Vfx),
     );
 

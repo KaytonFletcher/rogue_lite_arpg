@@ -76,7 +76,7 @@ impl RecipeCatalog {
         }
         self.recipes
             .get(name)
-            .ok_or_else(|| format!("unknown map recipe: {name}").into())
+            .with_context(|| format!("unknown map recipe: {name}"))
     }
 
     pub(super) fn weighted(&self, random_generator: &mut impl Rng) -> Result<&MapRecipe> {
@@ -89,7 +89,7 @@ impl RecipeCatalog {
         let name = &self.weighted_names[index.sample(random_generator)];
         self.recipes
             .get(name)
-            .ok_or_else(|| "weighted recipe catalog is empty".into())
+            .context("weighted recipe catalog is empty")
     }
 }
 
@@ -181,7 +181,7 @@ impl RecipeEntry {
         for preset in self.presets.as_ref().unwrap_or(&defaults.presets) {
             let preset_spawns = spawn_presets
                 .get(preset)
-                .ok_or_else(|| format!("recipe {name} uses unknown spawn preset {preset}"))?;
+                .with_context(|| format!("recipe {name} uses unknown spawn preset {preset}"))?;
             spawns.extend(preset_spawns.iter().cloned());
         }
         spawns.extend(self.spawns.unwrap_or_else(|| defaults.spawns.clone()));
@@ -500,7 +500,7 @@ pub(super) fn catalog_from_file(file: RecipeFile) -> Result<RecipeCatalog> {
     validate_recipe(&hub, &structures)?;
     for seed in 0..=8 {
         build_from_recipe(&hub, seed, &structures)
-            .map_err(|error| format!("map {} seed {seed}: {error}", hub.name))?;
+            .with_context(|| format!("map {} seed {seed}", hub.name))?;
     }
     let mut recipes = BTreeMap::new();
     let mut weighted_names = Vec::new();
@@ -508,7 +508,7 @@ pub(super) fn catalog_from_file(file: RecipeFile) -> Result<RecipeCatalog> {
     let dungeons = file.dungeons.into_iter().map(|entry| (entry, true));
     let arenas = file.arenas.into_iter().map(|entry| (entry, false));
     for (entry, is_dungeon) in dungeons.chain(arenas) {
-        let name = entry.name.clone().ok_or("recipe name is required")?;
+        let name = entry.name.clone().context("recipe name is required")?;
         if !names.insert(name.clone()) {
             return Err(format!("duplicate recipe name: {name}").into());
         }
@@ -517,7 +517,7 @@ pub(super) fn catalog_from_file(file: RecipeFile) -> Result<RecipeCatalog> {
         let weight = if is_dungeon {
             let weight = entry
                 .weight
-                .ok_or_else(|| format!("dungeon {name} requires a weight"))?;
+                .with_context(|| format!("dungeon {name} requires a weight"))?;
             if weight == 0 {
                 return Err(format!("dungeon {name} weight must be positive").into());
             }
@@ -530,7 +530,7 @@ pub(super) fn catalog_from_file(file: RecipeFile) -> Result<RecipeCatalog> {
         validate_recipe(&recipe, &structures)?;
         for seed in 0..=8 {
             build_from_recipe(&recipe, seed, &structures)
-                .map_err(|error| format!("map {name} seed {seed}: {error}"))?;
+                .with_context(|| format!("map {name} seed {seed}"))?;
         }
         order.push(name.clone());
         recipes.insert(name, recipe);
@@ -553,7 +553,7 @@ use std::fs::File;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn fetch_recipe_data() -> Result<File> {
     File::open("assets/config/map_recipes.ron")
-        .map_err(|error| format!("failed to open assets/config/map_recipes.ron: {error}").into())
+        .context("failed to open assets/config/map_recipes.ron")
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -568,7 +568,7 @@ pub(super) fn load_recipe_file() -> Result<RecipeFile> {
     let reader = BufReader::new(fetch_recipe_data());
     recipe_options()
         .from_reader(reader)
-        .map_err(|error| format!("failed to parse assets/config/map_recipes.ron: {error}").into())
+        .context("failed to parse assets/config/map_recipes.ron")
 }
 
 pub(super) fn recipe_options() -> Options {

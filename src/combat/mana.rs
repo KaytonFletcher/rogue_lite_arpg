@@ -9,6 +9,13 @@ pub struct Mana {
     pub regen_rate: f32,
 }
 
+/// A full pool of 100 that refills 10 per second, what every caster starts with.
+impl Default for Mana {
+    fn default() -> Self {
+        Self::new(100.0, 10.0)
+    }
+}
+
 impl Mana {
     pub fn new(max: f32, regen_rate: f32) -> Self {
         Self {
@@ -43,10 +50,10 @@ impl Mana {
 }
 
 /// Attach it to projectiles, weapons, spells, etc... if they cost mana to use.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Default, Clone, Copy, Debug)]
 pub struct ManaCost(pub f32);
 
-#[derive(Component, Clone)]
+#[derive(Component, Default, Clone)]
 pub struct ManaDrainRate(pub f32);
 
 /// Regenerates all `Mana` in game based on time elapsed and the given mana instance's regeneration
