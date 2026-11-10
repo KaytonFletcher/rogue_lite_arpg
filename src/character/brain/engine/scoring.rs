@@ -1,9 +1,7 @@
 //! How a consideration turns one raw input into a `0.0..=1.0` score.
 
 use super::behavior::Behavior;
-use crate::character::brain::perception::{
-    ConsiderationInput, DecisionContext, read_consideration_input,
-};
+use crate::character::brain::perception::ConsiderationInput;
 
 /// An ordered `min < max` interval: a distance range, a consideration's input
 /// range, or a span of seconds to roll from.
@@ -132,23 +130,33 @@ impl Curve {
     }
 }
 
-/// Final bounded score for one behavior. `is_current` switches threshold
-/// considerations to their exit side.
+/// Final bounded score for one behavior, reading each consideration's input
+/// through `read`. `is_current` switches threshold considerations to their exit side.
 pub fn score_behavior(
     behavior: &Behavior,
-    decision_context: &DecisionContext,
+    read: &impl Fn(ConsiderationInput) -> Option<f32>,
     is_current: bool,
 ) -> Option<f32> {
-    // Weight times the geometric mean: a zero anywhere vetoes, but each
-    // passing flag raises graded inputs to a higher root, so adding a flag
-    // shifts a behavior's crossovers. Brains are tuned against that root.
+    combine(
+        behavior.weight,
+        behavior.considerations.iter().map(|consideration| {
+            score_consideration(consideration, read(consideration.input), is_current)
+        }),
+    )
+}
+
+/// Weight times the geometric mean of `scores`; `None` when any score is
+/// `None`. A zero anywhere vetoes, but each passing flag raises graded inputs
+/// to a higher root, so adding a flag shifts a behavior's crossovers. Brains
+/// are tuned against that root.
+pub(super) fn combine(weight: f32, scores: impl IntoIterator<Item = Option<f32>>) -> Option<f32> {
     let mut product = 1.0;
     let mut count = 0;
-    for consideration in behavior.considerations {
-        product *= score_consideration(consideration, decision_context, is_current)?;
+    for score in scores {
+        product *= score?;
         count += 1;
     }
-    let mut score = behavior.weight;
+    let mut score = weight;
     if count > 0 {
         score *= product.powf(1.0 / (count as f32));
     }
@@ -156,13 +164,15 @@ pub fn score_behavior(
     (score.is_finite() && score >= 0.0).then_some(score)
 }
 
+/// Scores one consideration from its `raw` input; `None` when the score
+/// mapping rejects a non-finite raw value.
 pub(super) fn score_consideration(
     consideration: &Consideration,
-    decision_context: &DecisionContext,
+    raw: Option<f32>,
     is_current: bool,
 ) -> Option<f32> {
     // A missing input (no target, no home area) vetoes, inverted or not.
-    let Some(raw) = read_consideration_input(consideration.input, decision_context) else {
+    let Some(raw) = raw else {
         return Some(0.0);
     };
     let score = consideration
@@ -173,4 +183,85 @@ pub(super) fn score_consideration(
     } else {
         score
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::character::brain::considerations::{consideration, flag};
+    use crate::character::brain::{CommitPolicy, Motion};
+
+    const FLAG: Consideration = flag("flag", ConsiderationInput::HasTarget);
+    const GRADED: Consideration = consideration(
+        "graded",
+        ConsiderationInput::TargetDistance,
+        Interval::new(0.0, 1.0),
+        Curve::Linear,
+    );
+
+    fn behavior(considerations: &'static [Consideration]) -> Behavior {
+        Behavior::new(
+            Some(Motion::Chase),
+            None,
+            CommitPolicy::ContinuouslyScored,
+            8.0,
+            considerations,
+        )
+    }
+
+    #[test]
+    fn score_is_weight_times_geometric_mean() {
+        let read = |input: ConsiderationInput| match input {
+            ConsiderationInput::TargetDistance => Some(0.125),
+            _ => Some(1.0),
+        };
+        let score = score_behavior(&behavior(&[FLAG, FLAG, GRADED]), &read, false)
+            .expect("finite inputs score");
+        assert!(
+            (score - 4.0).abs() < 1e-4,
+            "8 x 0.125^(1/3) is 4, got {score}"
+        );
+    }
+
+    #[test]
+    fn missing_input_vetoes_even_when_inverted() {
+        let read = |_: ConsiderationInput| None;
+        let inverted = FLAG.inverted("no flag");
+        assert_eq!(
+            score_consideration(&inverted, read(inverted.input), false),
+            Some(0.0),
+            "a missing input scores zero, inverted or not"
+        );
+        let score = score_behavior(&behavior(&[FLAG, GRADED]), &read, false)
+            .expect("a veto is a zero score, not an invalid one");
+        assert!(score.abs() < f32::EPSILON, "one zero vetoes the behavior");
+    }
+
+    #[test]
+    fn non_finite_input_invalidates_the_score() {
+        let read = |_: ConsiderationInput| Some(f32::NAN);
+        assert_eq!(
+            score_behavior(&behavior(&[GRADED]), &read, false),
+            None,
+            "a non-finite raw input makes the whole score invalid"
+        );
+    }
+
+    #[test]
+    fn threshold_holds_while_current() {
+        let mapping = ScoreMapping::Threshold {
+            enter: 100.0,
+            exit: 120.0,
+        };
+        assert_eq!(
+            mapping.score_raw_input(110.0, false),
+            Some(0.0),
+            "past enter"
+        );
+        assert_eq!(
+            mapping.score_raw_input(110.0, true),
+            Some(1.0),
+            "inside exit"
+        );
+    }
 }
