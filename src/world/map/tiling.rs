@@ -174,8 +174,8 @@ pub(crate) fn mark_piece(
     mark: GroundMark,
     corner: IVec2,
 ) -> Option<u32> {
-    let mask = corner_mask(marks, corner, |cell| cell == Some(mark));
-    dual_piece(mark_first(mark), mask, seed, 16 + mark as u32, corner)
+    let covered = corner_mask(marks, corner, |cell| cell == Some(mark));
+    dual_piece(mark_first(mark), covered, seed, 16 + mark as u32, corner)
 }
 
 /// First animation frame of the haze piece at a dual-grid corner, or `None` without haze.
