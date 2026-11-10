@@ -1,7 +1,9 @@
 //! What scoring reads, answered on demand: [`DecisionInputs`] reads each
-//! consideration's input, capability profile and availability straight from the
-//! query item when the decision asks for it, so nothing is copied up front.
+//! consideration's input (for one candidate target), capability profile and
+//! availability straight from the world when the decision asks for it, so
+//! nothing is copied up front.
 
+use avian2d::prelude::{RayCaster, SpatialQuery};
 use bevy::ecs::query::QueryData;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -9,7 +11,7 @@ use bevy::prelude::*;
 use super::Brain;
 use super::action::{Ability, Action, Bite, Breath, Heal, find_carried_potion};
 use super::capability::CapabilityProfile;
-use super::engine::Behavior;
+use super::engine::{Behavior, MAX_TARGETS, TargetPools};
 use super::motion::{Dash, HomeArea, Motion, Orbit, Swoop, Wander};
 use super::perception::Targeting;
 use crate::prelude::*;
@@ -51,8 +53,10 @@ pub(super) struct BrainMemory {
 pub(super) struct DecisionInputComponents {
     entity: Entity,
     transform: &'static Transform,
-    has_target: Has<Targeting>,
+    targeting: Option<&'static Targeting>,
     target_info: Option<&'static TargetInfo>,
+    side: Option<&'static CombatSide>,
+    ray_caster: Option<&'static RayCaster>,
     health: Option<&'static Health>,
     mana: Option<&'static Mana>,
     home_area: Option<&'static HomeArea>,
@@ -67,12 +71,37 @@ pub(super) struct DecisionInputComponents {
     heal: Option<&'static Heal>,
 }
 
-/// The queries behind equipment profiles and the world-allows-use checks.
+/// The queries behind equipment profiles, the world-allows-use checks, and the
+/// facts about targets other than the focus.
 #[derive(SystemParam)]
 pub(super) struct DecisionQueries<'w, 's> {
     equipment: EquipmentRead<'w, 's>,
     consumables: Query<'w, 's, (), With<Consumable>>,
     items_in_use: Query<'w, 's, (), With<EquipmentInUse>>,
+    /// Every character: each one carries a `CombatSide`.
+    characters: Query<'w, 's, (Entity, &'static Transform, &'static CombatSide)>,
+    children: Query<'w, 's, &'static Children>,
+    spatial: SpatialQuery<'w, 's>,
+}
+
+/// The hostiles one decision may pick from: the focus, then up to
+/// [`MAX_TARGETS`] in all of the opposing side within sight range.
+pub(super) struct Hostiles {
+    entities: [Entity; MAX_TARGETS],
+    len: usize,
+}
+
+impl Hostiles {
+    fn push(&mut self, entity: Entity) {
+        if self.len < MAX_TARGETS {
+            self.entities[self.len] = entity;
+            self.len += 1;
+        }
+    }
+
+    pub fn as_slice(&self) -> &[Entity] {
+        &self.entities[..self.len]
+    }
 }
 
 /// One decision's view of the world: references only, read on demand.
@@ -83,12 +112,120 @@ pub(super) struct DecisionInputs<'a, 'w, 's, 'qw, 'qs> {
 }
 
 impl DecisionInputs<'_, '_, '_, '_, '_> {
-    /// The tracked target while targeting one at a finite distance. `TargetInfo`
-    /// also tracks a watched entity, so every target input reads through here.
+    /// The focus target's tracking while targeting one at a finite distance.
+    /// `TargetInfo` also tracks a watched entity, so every focus read goes
+    /// through here.
     pub fn target(&self) -> Option<&TargetInfo> {
         self.item
             .target_info
-            .filter(|info| self.item.has_target && info.distance.is_finite())
+            .filter(|info| self.item.targeting.is_some() && info.distance.is_finite())
+    }
+
+    /// The focus target, while [`Self::target`] tracks it.
+    pub fn focus(&self) -> Option<Entity> {
+        self.target()
+            .and(self.item.targeting)
+            .map(|targeting| targeting.0)
+    }
+
+    /// Every hostile this brain may pick while it has a focus: the focus first,
+    /// then other characters of the opposing side within its sight range.
+    pub fn hostiles(&self) -> Hostiles {
+        let mut hostiles = Hostiles {
+            entities: [Entity::PLACEHOLDER; MAX_TARGETS],
+            len: 0,
+        };
+        let Some(focus) = self.focus() else {
+            return hostiles;
+        };
+        hostiles.push(focus);
+        let (Some(side), Some(ray_caster)) = (self.item.side, self.item.ray_caster) else {
+            return hostiles;
+        };
+        let position = self.position();
+        for (entity, transform, other_side) in &self.queries.characters {
+            if entity != focus
+                && other_side != side
+                && transform.translation.xy().distance(position) <= ray_caster.max_distance
+            {
+                hostiles.push(entity);
+            }
+        }
+        hostiles
+    }
+
+    /// One decision's target pools over `hostiles`.
+    pub fn pools<'h>(&self, hostiles: &'h Hostiles) -> TargetPools<'h, Entity> {
+        TargetPools {
+            focus: self.focus(),
+            hostiles: hostiles.as_slice(),
+        }
+    }
+
+    fn position(&self) -> Vec2 {
+        self.item.transform.translation.xy()
+    }
+
+    /// Whether `target` is the focus, whose facts come from `TargetInfo`.
+    fn is_focus(&self, target: Entity) -> bool {
+        self.item
+            .targeting
+            .is_some_and(|targeting| targeting.0 == target)
+    }
+
+    /// Distance to `target`; `None` when it is gone or not at a finite distance.
+    fn target_distance(&self, target: Option<Entity>) -> Option<f32> {
+        let target = target?;
+        if self.is_focus(target) {
+            return self.target().map(|info| info.distance);
+        }
+        let (_, transform, _) = self.queries.characters.get(target).ok()?;
+        Some(transform.translation.xy().distance(self.position())).filter(|d| d.is_finite())
+    }
+
+    /// Whether the sight ray reaches `target`. The focus reads the vision
+    /// system's ray; another target casts one with the same settings.
+    fn line_of_sight(&self, target: Option<Entity>) -> Option<bool> {
+        let target = target?;
+        if self.is_focus(target) {
+            return self.target().map(|info| info.line_of_sight);
+        }
+        let (_, transform, _) = self.queries.characters.get(target).ok()?;
+        let ray_caster = self.item.ray_caster?;
+        let origin = ray_caster.global_origin();
+        let Ok(direction) = Dir2::new(transform.translation.xy() - origin) else {
+            // Standing on the target: nothing can be in the way.
+            return Some(true);
+        };
+        let hit = self.queries.spatial.cast_ray(
+            origin,
+            direction,
+            ray_caster.max_distance,
+            ray_caster.solid,
+            &ray_caster.query_filter,
+        );
+        Some(hit.is_some_and(|hit| {
+            hit.entity == target
+                || self
+                    .queries
+                    .children
+                    .get(target)
+                    .is_ok_and(|children| children.contains(&hit.entity))
+        }))
+    }
+
+    /// Seconds since the focus was targeted; another target reads zero, as
+    /// switching to it would start its clock now.
+    fn seconds_since_targeted(&self, target: Option<Entity>) -> Option<f32> {
+        let target = target?;
+        if self.is_focus(target) {
+            return self.target().map(|info| self.now - info.targeted_at);
+        }
+        self.queries.characters.contains(target).then_some(0.0)
+    }
+
+    pub fn entity(&self) -> Entity {
+        self.item.entity
     }
 
     pub fn stunned(&self) -> bool {
@@ -166,14 +303,20 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         behavior.motion.is_none_or(motion_available) && behavior.action.is_none_or(action_available)
     }
 
-    /// Answers `input`; `None` when it is absent, which vetoes the behavior.
-    pub fn read(&self, input: ConsiderationInput, memory: BrainMemory) -> Option<f32> {
+    /// Answers `input` about `target`; `None` when it is absent, which vetoes the
+    /// behavior. Inputs about the character itself ignore `target`.
+    pub fn read(
+        &self,
+        input: ConsiderationInput,
+        target: Option<Entity>,
+        memory: BrainMemory,
+    ) -> Option<f32> {
         match input {
-            ConsiderationInput::HasTarget => Some(f32::from(self.target().is_some())),
-            ConsiderationInput::LineOfSight => {
-                self.target().map(|target| f32::from(target.line_of_sight))
+            ConsiderationInput::HasTarget => {
+                Some(f32::from(self.target_distance(target).is_some()))
             }
-            ConsiderationInput::TargetDistance => self.target().map(|target| target.distance),
+            ConsiderationInput::LineOfSight => self.line_of_sight(target).map(f32::from),
+            ConsiderationInput::TargetDistance => self.target_distance(target),
             ConsiderationInput::MissingHealth => {
                 Some(1.0 - self.item.health.and_then(Health::fraction).unwrap_or(1.0))
             }
@@ -191,15 +334,13 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
             ))),
             ConsiderationInput::HomeAreaPull => self.home_area_pull(memory),
             ConsiderationInput::AttackFinished => Some(f32::from(memory.attack_finished)),
-            ConsiderationInput::MotionReachFraction(motion) => {
-                self.reach_fraction(self.motion_profile(motion))
-            }
-            ConsiderationInput::ActionReachFraction(action) => {
-                self.reach_fraction(self.action_profile(action))
-            }
-            ConsiderationInput::SecondsSinceTargeted => {
-                self.target().map(|target| self.now - target.targeted_at)
-            }
+            ConsiderationInput::MotionReachFraction(motion) => self
+                .target_distance(target)
+                .map(|distance| reach_fraction(distance, self.motion_profile(motion))),
+            ConsiderationInput::ActionReachFraction(action) => self
+                .target_distance(target)
+                .map(|distance| reach_fraction(distance, self.action_profile(action))),
+            ConsiderationInput::SecondsSinceTargeted => self.seconds_since_targeted(target),
         }
     }
 
@@ -216,11 +357,6 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         } else {
             Some(overshoot_fraction)
         }
-    }
-
-    fn reach_fraction(&self, profile: Option<CapabilityProfile>) -> Option<f32> {
-        self.target()
-            .map(|target| reach_fraction(target.distance, profile))
     }
 }
 

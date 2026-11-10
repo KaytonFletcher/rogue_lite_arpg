@@ -15,6 +15,8 @@ const COMMIT_TIMEOUT: f32 = 3.0;
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RunningBehavior {
     pub(super) behavior: usize,
+    /// The target it won against; `None` for a behavior that needs none.
+    pub(super) target: Option<Entity>,
     pub(super) motion: Option<Motion>,
     pub(super) action: Option<Action>,
     pub(super) behavior_run_id: u32,

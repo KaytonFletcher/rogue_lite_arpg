@@ -1,6 +1,6 @@
 //! Behaviors and static brain definitions, and the check that a definition can run.
 
-use super::Consideration;
+use super::{Consideration, Targets};
 use crate::character::brain::{Action, Motion};
 
 /// Most behaviors one brain definition may list, so scoring needs no allocation.
@@ -15,10 +15,13 @@ pub struct Behavior {
     pub commit: CommitPolicy,
     pub weight: f32,
     pub considerations: &'static [Consideration],
+    /// The targets it scores against; [`Targets::Focus`] unless set.
+    pub targets: Targets,
 }
 
 impl Behavior {
-    /// Builds a behavior; [`validate_brain`] checks its shape and weight.
+    /// Builds a behavior over the focus target; [`validate_brain`] checks its
+    /// shape and weight.
     pub const fn new(
         motion: Option<Motion>,
         action: Option<Action>,
@@ -32,7 +35,13 @@ impl Behavior {
             commit,
             weight,
             considerations,
+            targets: Targets::Focus,
         }
+    }
+
+    /// The same behavior scored against every target in `targets`, keeping the best.
+    pub const fn with_targets(self, targets: Targets) -> Self {
+        Self { targets, ..self }
     }
 
     /// Whether both behaviors claim the motion slot or both claim the action slot.

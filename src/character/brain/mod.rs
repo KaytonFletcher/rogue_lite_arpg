@@ -2,7 +2,8 @@
 //! 1. [`perception`] tracks targets, and its `DecisionInputs` answers each consideration's input
 //!    straight from the world when scoring asks.
 //! 2. [`decide`] runs the pure [`engine`] scoring and writes which behavior holds each slot on the
-//!    [`Brain`].
+//!    [`Brain`]. Each behavior scores every target in its [`Targets`] pool; a winner against a
+//!    hostile other than the focus makes it the new [`Targeting`] focus.
 //! 3. [`motion`] and [`action`] carry out the held motion and action and report
 //!    [`MotionFinished`](motion::MotionFinished) or [`ActionFinished`].
 //!
@@ -44,9 +45,9 @@ pub use self::capability::CapabilityProfile;
 use self::capability::{MotionActionKey, MotionActionTable};
 pub use self::decide::ScoreTrace;
 use self::decide::schedule_first_decision;
-use self::engine::validate_brain;
 pub(crate) use self::engine::{Behavior, CommitPolicy, Consideration, Curve};
-pub use self::engine::{BrainDefinition, Interval};
+pub use self::engine::{BrainDefinition, Interval, Targets};
+use self::engine::{Pick, validate_brain};
 pub(crate) use self::inputs::ConsiderationInput;
 use self::inputs::{BrainMemory, DecisionInputs};
 use self::motion::Steering;
@@ -134,10 +135,14 @@ impl Brain {
         self.ready_at[key] = ready_at;
     }
 
-    fn running_behavior_ids(&self) -> Vec<usize> {
+    /// Each running behavior and the target it runs against.
+    fn running_picks(&self) -> Vec<Pick<Entity>> {
         self.running_behaviors
             .iter()
-            .map(|running| running.behavior)
+            .map(|running| Pick {
+                behavior: running.behavior,
+                target: running.target,
+            })
             .collect()
     }
 
@@ -152,11 +157,11 @@ impl Brain {
     /// Applies a decision. The only place an attack-finished edge is consumed.
     fn commit_decision(
         &mut self,
-        winning_behavior_ids: &[usize],
+        winners: &[Pick<Entity>],
         missed_start_cooldowns: &MotionActionTable<Option<f32>>,
         inputs: &DecisionInputs,
     ) {
-        self.assign_slots(winning_behavior_ids, inputs);
+        self.assign_slots(winners, inputs);
         for &motion in Motion::ALL.iter().filter(|motion| motion.is_finite()) {
             if let Some(ready_at) = missed_start_cooldowns[motion] {
                 self.start_cooldown(motion, ready_at);
@@ -165,17 +170,16 @@ impl Brain {
         self.attack_finish_pending = false;
     }
 
-    /// Runs the winning behaviors, keeping the record of one already running. A committed
-    /// behavior keeps running until a winner shares one of its slots, which ends
-    /// it; anything else not won again stops. Winners never share a slot, so
-    /// neither do running behaviors.
-    fn assign_slots(&mut self, winning_behavior_ids: &[usize], inputs: &DecisionInputs) {
+    /// Runs the winners, keeping the record of a behavior already running
+    /// against the same target. A committed behavior keeps running until a
+    /// winner shares one of its slots, which ends it; anything else not won
+    /// again stops. Winners never share a slot, so neither do running behaviors.
+    fn assign_slots(&mut self, winners: &[Pick<Entity>], inputs: &DecisionInputs) {
         let behaviors = self.definition.behaviors;
         for running in self.running_behaviors.clone() {
-            let displaced = winning_behavior_ids.iter().any(|&winning_behavior_id| {
-                winning_behavior_id != running.behavior
-                    && behaviors[winning_behavior_id]
-                        .shares_a_slot_with(&behaviors[running.behavior])
+            let displaced = winners.iter().any(|winner| {
+                winner.behavior != running.behavior
+                    && behaviors[winner.behavior].shares_a_slot_with(&behaviors[running.behavior])
             });
             if running.committed && displaced {
                 self.drop_committed_behavior(running, inputs);
@@ -184,26 +188,29 @@ impl Brain {
         let previous = std::mem::take(&mut self.running_behaviors);
         self.running_behaviors
             .extend(previous.iter().copied().filter(|running| {
-                running.committed && !winning_behavior_ids.contains(&running.behavior)
+                running.committed
+                    && !winners
+                        .iter()
+                        .any(|winner| winner.behavior == running.behavior)
             }));
-        for &winning_behavior_id in winning_behavior_ids {
-            let running = match previous
-                .iter()
-                .find(|running| running.behavior == winning_behavior_id)
-            {
+        for &winner in winners {
+            let running = match previous.iter().find(|running| {
+                running.behavior == winner.behavior && running.target == winner.target
+            }) {
                 Some(&kept) => kept,
-                None => self.start_running_behavior(winning_behavior_id, inputs.now),
+                None => self.start_running_behavior(winner, inputs.now),
             };
             self.running_behaviors.push(running);
         }
     }
 
-    /// Stamps a new run of behavior `index` with the next run id.
-    fn start_running_behavior(&mut self, index: usize, now: f32) -> RunningBehavior {
+    /// Stamps a new run of `pick` with the next run id.
+    fn start_running_behavior(&mut self, pick: Pick<Entity>, now: f32) -> RunningBehavior {
         self.next_behavior_run_id = self.next_behavior_run_id.wrapping_add(1);
-        let behavior = self.definition.behaviors[index];
+        let behavior = self.definition.behaviors[pick.behavior];
         RunningBehavior {
-            behavior: index,
+            behavior: pick.behavior,
+            target: pick.target,
             motion: behavior.motion,
             action: behavior.action,
             behavior_run_id: self.next_behavior_run_id,

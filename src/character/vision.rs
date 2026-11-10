@@ -24,5 +24,8 @@ pub struct TargetInfo {
     pub in_vision_cone: bool,
     /// When the current `Targeting` was acquired, in virtual seconds.
     pub targeted_at: f32,
+    /// The entity `targeted_at` was stamped for, so a re-insert of the same
+    /// target keeps the clock and a switch restarts it.
+    pub targeted: Option<Entity>,
     // TODO: Add `last_known_position` for memory/prediction systems.
 }

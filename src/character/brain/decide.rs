@@ -15,7 +15,7 @@ use super::engine::{
 };
 use super::inputs::{ConsiderationInput, DecisionInputComponents, DecisionInputs, DecisionQueries};
 use super::motion::MotionFinished;
-use super::{Action, ActionFinished, ActionOutcome, Brain};
+use super::{Action, ActionFinished, ActionOutcome, Brain, Targeting};
 
 /// Seconds between a brain's scheduled decisions.
 const DECISION_PERIOD: f32 = 0.1;
@@ -34,7 +34,7 @@ type DecidingBrains<'world, 'state> = Query<
 /// definition order. Only brains carrying it pay for the explanations.
 #[derive(Component, Debug, Default)]
 pub struct ScoreTrace {
-    pub behavior_explanations: Vec<BehaviorScoreExplanation>,
+    pub behavior_explanations: Vec<BehaviorScoreExplanation<Entity>>,
 }
 
 /// Puts a new brain's first decision at a random point in the next period, so brains spawned
@@ -54,6 +54,7 @@ pub(super) fn on_release_finished_motion(
     time: Res<Time<Virtual>>,
     queries: DecisionQueries,
     mut brains: DecidingBrains,
+    mut commands: Commands,
     #[cfg(feature = "dev_tools")] mut decision_stats: ResMut<DecisionStats>,
 ) {
     let Ok((mut brain, item, mut score_trace)) = brains.get_mut(finished.entity) else {
@@ -71,7 +72,12 @@ pub(super) fn on_release_finished_motion(
     if brain.finish_committed_behavior(finished.behavior_run_id) {
         #[cfg(feature = "tracy")]
         let _span = info_span!("decide::after_motion").entered();
-        redecide_now(&mut brain, &inputs, score_trace.as_deref_mut());
+        redecide_now(
+            &mut brain,
+            &inputs,
+            &mut commands,
+            score_trace.as_deref_mut(),
+        );
         #[cfg(feature = "dev_tools")]
         decision_stats.record_redecision();
     }
@@ -85,6 +91,7 @@ pub(super) fn on_finish_action(
     time: Res<Time<Virtual>>,
     queries: DecisionQueries,
     mut brains: DecidingBrains,
+    mut commands: Commands,
     #[cfg(feature = "dev_tools")] mut decision_stats: ResMut<DecisionStats>,
 ) {
     let Ok((mut brain, item, mut score_trace)) = brains.get_mut(finished.entity) else {
@@ -114,7 +121,12 @@ pub(super) fn on_finish_action(
     if brain.finish_committed_behavior(finished.behavior_run_id) {
         #[cfg(feature = "tracy")]
         let _span = info_span!("decide::after_action").entered();
-        redecide_now(&mut brain, &inputs, score_trace.as_deref_mut());
+        redecide_now(
+            &mut brain,
+            &inputs,
+            &mut commands,
+            score_trace.as_deref_mut(),
+        );
         #[cfg(feature = "dev_tools")]
         decision_stats.record_redecision();
     }
@@ -126,6 +138,7 @@ pub(super) fn decide_behavior(
     time: Res<Time<Virtual>>,
     queries: DecisionQueries,
     mut brains: DecidingBrains,
+    mut commands: Commands,
     #[cfg(feature = "dev_tools")] mut decision_stats: ResMut<DecisionStats>,
 ) {
     let now = time.elapsed_secs();
@@ -148,6 +161,7 @@ pub(super) fn decide_behavior(
                 queries: &queries,
                 now,
             },
+            &mut commands,
             score_trace.as_deref_mut(),
         );
         #[cfg(feature = "dev_tools")]
@@ -156,9 +170,16 @@ pub(super) fn decide_behavior(
 }
 
 /// Drops committed behaviors that lost their target, were stunned or timed
-/// out, then fills the slots. A winning finite motion rolls its start chance; a
-/// miss waits out its cooldown and the next best behavior takes the slot.
-fn redecide_now(brain: &mut Brain, inputs: &DecisionInputs, score_trace: Option<&mut ScoreTrace>) {
+/// out, then fills the slots, each behavior against the best target in its
+/// pool. A winning finite motion rolls its start chance; a miss waits out its
+/// cooldown and the next best behavior takes the slot. A winner against a
+/// hostile other than the focus makes it the new focus.
+fn redecide_now(
+    brain: &mut Brain,
+    inputs: &DecisionInputs,
+    commands: &mut Commands,
+    score_trace: Option<&mut ScoreTrace>,
+) {
     let (has_target, stunned) = (inputs.target().is_some(), inputs.stunned());
     for running in brain.running_behaviors.clone() {
         if running.should_drop_committed_behavior(has_target, stunned, inputs.now) {
@@ -168,40 +189,41 @@ fn redecide_now(brain: &mut Brain, inputs: &DecisionInputs, score_trace: Option<
     // Read after the drops, which change the running motion and cooldowns.
     let memory = brain.memory();
     let definition = brain.definition();
-    let running_behavior_ids = brain.running_behavior_ids();
-    let read = |input: ConsiderationInput| inputs.read(input, memory);
+    let running = brain.running_picks();
+    let hostiles = inputs.hostiles();
+    let pools = inputs.pools(&hostiles);
+    let read =
+        |input: ConsiderationInput, target: Option<Entity>| inputs.read(input, target, memory);
     let available = |behavior: &Behavior| inputs.is_available(behavior, brain);
     if let Some(score_trace) = score_trace {
         #[cfg(feature = "tracy")]
         let _span = info_span!("decide::explain").entered();
         score_trace.behavior_explanations.clear();
-        score_trace
-            .behavior_explanations
-            .extend((0..definition.behaviors.len()).map(|index| {
-                explain_behavior(definition, index, &read, &available, &running_behavior_ids)
-            }));
+        score_trace.behavior_explanations.extend(
+            (0..definition.behaviors.len()).map(|index| {
+                explain_behavior(definition, index, &pools, &read, &available, &running)
+            }),
+        );
     }
     let mut missed_start_cooldowns = MotionActionTable::<Option<f32>>::default();
-    let winning_behavior_ids = {
+    let winners = {
         #[cfg(feature = "tracy")]
         let _span = info_span!("decide::assign").entered();
-        assign_behaviors_to_slots(
-            definition,
-            &read,
-            &available,
-            &running_behavior_ids,
-            |index| {
-                passes_start_roll(
-                    inputs,
-                    definition.behaviors[index],
-                    &mut missed_start_cooldowns,
-                )
-            },
-        )
+        assign_behaviors_to_slots(definition, &pools, &read, &available, &running, |index| {
+            passes_start_roll(
+                inputs,
+                definition.behaviors[index],
+                &mut missed_start_cooldowns,
+            )
+        })
     };
     #[cfg(feature = "tracy")]
     let _span = info_span!("decide::commit").entered();
-    brain.commit_decision(&winning_behavior_ids, &missed_start_cooldowns, inputs);
+    brain.commit_decision(&winners, &missed_start_cooldowns, inputs);
+    let target = winners.iter().find_map(|winner| winner.target);
+    if let Some(target) = target.filter(|&target| pools.focus != Some(target)) {
+        commands.entity(inputs.entity()).insert(Targeting(target));
+    }
 }
 
 fn passes_start_roll(

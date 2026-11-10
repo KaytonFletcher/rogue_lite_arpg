@@ -10,7 +10,8 @@ use crate::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_observer(on_damage_aggro)
-        .add_observer(on_targeting_added_record_time)
+        .add_observer(on_targeting_inserted)
+        .add_observer(on_targeting_removed)
         .add_systems(
             Update,
             (
@@ -40,7 +41,12 @@ impl Default for VisionCone {
     }
 }
 
-/// The entity this one fights, added on sight or when damaged.
+/// Seconds a newly targeted entity is kept without line of sight while the
+/// sight ray turns to it.
+const SIGHT_GRACE: f32 = 0.2;
+
+/// The entity this one fights, added on sight, when damaged, or when the brain
+/// picks another hostile.
 #[derive(Component)]
 #[relationship(relationship_target = TargetedBy)]
 pub(crate) struct Targeting(pub Entity);
@@ -182,15 +188,38 @@ fn on_damage_aggro(
     }
 }
 
-/// Records when targeting begins. Only on add, so re-inserts from repeated
-/// hits and target switches keep the clock.
-fn on_targeting_added_record_time(
-    added: On<Add<Targeting>>,
+/// Starts the targeting clock when a new entity is targeted; re-inserts of the
+/// same target from repeated hits keep it. A switch also points `TargetInfo` at
+/// the new target at once, so motions and actions this frame aim at it.
+fn on_targeting_inserted(
+    inserted: On<Insert<Targeting>>,
     time: Res<Time<Virtual>>,
-    mut target_infos: Query<&mut TargetInfo>,
+    mut trackers: Query<(&mut TargetInfo, &Transform, &Targeting)>,
+    targets: Query<(&Transform, Option<&Kinematics>)>,
 ) {
-    if let Ok(mut target_info) = target_infos.get_mut(added.entity) {
-        target_info.targeted_at = time.elapsed_secs();
+    let Ok((mut target_info, transform, targeting)) = trackers.get_mut(inserted.entity) else {
+        return;
+    };
+    let target = targeting.0;
+    if target_info.targeted == Some(target) {
+        return;
+    }
+    target_info.targeted = Some(target);
+    target_info.targeted_at = time.elapsed_secs();
+    if let Ok((target_transform, target_kinematics)) = targets.get(target) {
+        let position = transform.translation.xy();
+        let target_position = target_transform.translation.xy();
+        target_info.direction = (target_position - position).normalize_or_zero();
+        target_info.distance = target_position.distance(position);
+        target_info.position = target_position;
+        target_info.velocity = target_kinematics.map_or(Vec2::ZERO, Kinematics::velocity);
+    }
+}
+
+/// Forgets the targeted entity, so targeting it again restarts the clock.
+fn on_targeting_removed(removed: On<Remove<Targeting>>, mut target_infos: Query<&mut TargetInfo>) {
+    if let Ok(mut target_info) = target_infos.get_mut(removed.entity) {
+        target_info.targeted = None;
     }
 }
 
@@ -207,12 +236,17 @@ fn should_target_watched(
 }
 
 /// Stops targeting if the entity loses sight of the target or the target lock has expired.
+/// A target switched to within [`SIGHT_GRACE`] is kept, since the sight ray only turns to it
+/// after the next physics step.
 fn should_stop_targeting(
     mut commands: Commands,
+    time: Res<Time<Virtual>>,
     npc_query: Query<(&TargetInfo, Has<TargetLock>, Entity), With<Targeting>>,
 ) {
+    let now = time.elapsed_secs();
     for (target_info, has_lock, entity) in &npc_query {
-        if !target_info.line_of_sight && !has_lock {
+        let settling = now - target_info.targeted_at < SIGHT_GRACE;
+        if !target_info.line_of_sight && !has_lock && !settling {
             commands.entity(entity).remove::<Targeting>();
         }
     }
