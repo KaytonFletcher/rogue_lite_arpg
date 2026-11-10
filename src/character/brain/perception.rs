@@ -1,24 +1,17 @@
-//! What a brain knows: vision tracks a target, and [`build_decision_context`] reads world state
-//! into the [`DecisionContext`] the considerations read.
+//! What a brain knows: vision tracks a target and aggro picks one.
 
 use std::f32::consts::FRAC_PI_4;
 
 use avian2d::prelude::{RayCaster, RayHits};
-use bevy::ecs::query::QueryData;
-use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::BrainSystems;
-use super::action::{Ability, Action, find_carried_potion};
-use super::capability::{
-    CapabilityProfiles, MotionActionTable, UseEligibilityTable, capability_keys,
-};
-use super::motion::{HomeArea, Motion};
 use crate::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_observer(on_damage_aggro)
-        .add_observer(on_targeting_added_record_time)
+        .add_observer(on_targeting_inserted)
+        .add_observer(on_targeting_removed)
         .add_systems(
             Update,
             (
@@ -29,133 +22,6 @@ pub(super) fn plugin(app: &mut App) {
                 update_aim_position.in_set(BrainSystems::Aim),
             ),
         );
-}
-
-/// Target data visible to a brain this tick.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TargetView {
-    pub distance: f32,
-    pub line_of_sight: bool,
-    /// Unit direction from the viewer to the target.
-    pub bearing: Vec2,
-    pub velocity: Vec2,
-    pub seconds_since_targeted: f32,
-}
-
-/// Everything a pure brain may look at during one decision.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DecisionContext {
-    pub self_view: SelfView,
-    pub target_view: Option<TargetView>,
-    pub reach_fractions: MotionActionTable<Option<f32>>,
-    pub use_eligibility: UseEligibilityTable,
-    pub memory_view: MemoryView,
-}
-
-/// The deciding character's own state this tick.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SelfView {
-    pub health_fraction: f32,
-    /// `1.0` for a non-caster.
-    pub mana_fraction: f32,
-    pub stunned: bool,
-    pub home_area: Option<HomeAreaView>,
-}
-
-impl Default for SelfView {
-    fn default() -> Self {
-        Self {
-            health_fraction: 1.0,
-            mana_fraction: 1.0,
-            stunned: false,
-            home_area: None,
-        }
-    }
-}
-
-/// Where the character stands relative to the home area it is tethered to.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct HomeAreaView {
-    pub overshoot_fraction: f32,
-    pub arrived: bool,
-}
-
-/// The brain's own earlier choices, as scoring sees them.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct MemoryView {
-    pub motion: Option<Motion>,
-    /// An attack finished since the last decision.
-    pub attack_finished: bool,
-}
-
-/// The raw fact a consideration reads; see [`read_consideration_input`].
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ConsiderationInput {
-    HasTarget,
-    LineOfSight,
-    TargetDistance,
-    MissingHealth,
-    ManaFraction,
-    /// Whether this motion's kind is the one running; its payload is ignored.
-    MotionRunning(Motion),
-    /// Whether the running motion holds the target at a distance.
-    Circling,
-    /// How far past its home area range the character is.
-    HomeAreaPull,
-    AttackFinished,
-    /// Target distance over this motion's reach; at most `1.0` is in reach.
-    MotionReachFraction(Motion),
-    /// Target distance over this action's reach; at most `1.0` is in reach.
-    ActionReachFraction(Action),
-    SecondsSinceTargeted,
-}
-
-/// Reads `input` from the context; `None` when the input is absent.
-pub(super) fn read_consideration_input(
-    input: ConsiderationInput,
-    decision_context: &DecisionContext,
-) -> Option<f32> {
-    let boolean_input = |set: bool| Some(if set { 1.0 } else { 0.0 });
-    match input {
-        ConsiderationInput::HasTarget => boolean_input(decision_context.target_view.is_some()),
-        ConsiderationInput::LineOfSight => decision_context
-            .target_view
-            .and_then(|target| boolean_input(target.line_of_sight)),
-        ConsiderationInput::TargetDistance => {
-            decision_context.target_view.map(|target| target.distance)
-        }
-        ConsiderationInput::MissingHealth => Some(1.0 - decision_context.self_view.health_fraction),
-        ConsiderationInput::ManaFraction => Some(decision_context.self_view.mana_fraction),
-        ConsiderationInput::MotionRunning(motion) => boolean_input(
-            decision_context
-                .memory_view
-                .motion
-                .is_some_and(|running| running.index() == motion.index()),
-        ),
-        ConsiderationInput::Circling => boolean_input(matches!(
-            decision_context.memory_view.motion,
-            Some(Motion::Orbit(_) | Motion::KeepDistance(_))
-        )),
-        // Once already heading home it reads full until arrival, so crossing
-        // back inside the range mid-return cannot hand the character straight
-        // back to wandering.
-        ConsiderationInput::HomeAreaPull => {
-            let home_area = decision_context.self_view.home_area?;
-            if decision_context.memory_view.motion == Some(Motion::ReturnToHome) {
-                boolean_input(!home_area.arrived)
-            } else {
-                Some(home_area.overshoot_fraction)
-            }
-        }
-        ConsiderationInput::AttackFinished => {
-            boolean_input(decision_context.memory_view.attack_finished)
-        }
-        ConsiderationInput::MotionReachFraction(motion) => decision_context.reach_fractions[motion],
-        ConsiderationInput::ActionReachFraction(action) => decision_context.reach_fractions[action],
-        ConsiderationInput::SecondsSinceTargeted => decision_context
-            .target_view
-            .map(|target| target.seconds_since_targeted),
-    }
 }
 
 /// How wide an entity's vision cone is.
@@ -175,7 +41,12 @@ impl Default for VisionCone {
     }
 }
 
-/// The entity this one fights, added on sight or when damaged.
+/// Seconds a newly targeted entity is kept without line of sight while the
+/// sight ray turns to it.
+pub(super) const SIGHT_GRACE: f32 = 0.2;
+
+/// The entity this one fights, added on sight, when damaged, or when the brain
+/// picks another hostile.
 #[derive(Component)]
 #[relationship(relationship_target = TargetedBy)]
 pub(crate) struct Targeting(pub Entity);
@@ -317,15 +188,62 @@ fn on_damage_aggro(
     }
 }
 
-/// Records when targeting begins. Only on add, so re-inserts from repeated
-/// hits and target switches keep the clock.
-fn on_targeting_added_record_time(
-    added: On<Add<Targeting>>,
+/// Starts the targeting clock when a new entity is targeted; re-inserts of the
+/// same target from repeated hits keep it. When the sight ray was aimed at
+/// another entity, also turns the tracking, aim and ray to the new target at
+/// once, so motions and actions this frame aim at it. Its line of sight reads
+/// false until the turned ray reports, which [`SIGHT_GRACE`] covers.
+fn on_targeting_inserted(
+    inserted: On<Insert<Targeting>>,
     time: Res<Time<Virtual>>,
-    mut target_infos: Query<&mut TargetInfo>,
+    mut trackers: Query<(
+        &mut TargetInfo,
+        &Transform,
+        &Targeting,
+        Option<&Watching>,
+        Option<&mut Vision>,
+        Option<&mut RayCaster>,
+    )>,
+    targets: Query<(&Transform, Option<&Kinematics>)>,
 ) {
-    if let Ok(mut target_info) = target_infos.get_mut(added.entity) {
-        target_info.targeted_at = time.elapsed_secs();
+    let Ok((mut target_info, transform, targeting, watching, vision, ray_caster)) =
+        trackers.get_mut(inserted.entity)
+    else {
+        return;
+    };
+    let target = targeting.0;
+    if target_info.targeted == Some(target) {
+        return;
+    }
+    let tracked = target_info.targeted.or(watching.map(|watching| watching.0));
+    target_info.targeted = Some(target);
+    target_info.targeted_at = time.elapsed_secs();
+    if tracked == Some(target) {
+        return;
+    }
+    let Ok((target_transform, target_kinematics)) = targets.get(target) else {
+        return;
+    };
+    let position = transform.translation.xy();
+    let target_position = target_transform.translation.xy();
+    let direction = (target_position - position).normalize_or_zero();
+    target_info.direction = direction;
+    target_info.distance = target_position.distance(position);
+    target_info.position = target_position;
+    target_info.velocity = target_kinematics.map_or(Vec2::ZERO, Kinematics::velocity);
+    target_info.line_of_sight = false;
+    if let Some(mut vision) = vision {
+        vision.aim_direction = direction;
+    }
+    if let Some(mut ray_caster) = ray_caster {
+        ray_caster.direction = Dir2::new(direction).unwrap_or(Dir2::X);
+    }
+}
+
+/// Forgets the targeted entity, so targeting it again restarts the clock.
+fn on_targeting_removed(removed: On<Remove<Targeting>>, mut target_infos: Query<&mut TargetInfo>) {
+    if let Ok(mut target_info) = target_infos.get_mut(removed.entity) {
+        target_info.targeted = None;
     }
 }
 
@@ -342,133 +260,18 @@ fn should_target_watched(
 }
 
 /// Stops targeting if the entity loses sight of the target or the target lock has expired.
+/// A target switched to within [`SIGHT_GRACE`] is kept, since the sight ray only turns to it
+/// after the next physics step.
 fn should_stop_targeting(
     mut commands: Commands,
+    time: Res<Time<Virtual>>,
     npc_query: Query<(&TargetInfo, Has<TargetLock>, Entity), With<Targeting>>,
 ) {
+    let now = time.elapsed_secs();
     for (target_info, has_lock, entity) in &npc_query {
-        if !target_info.line_of_sight && !has_lock {
+        let settling = now - target_info.targeted_at < SIGHT_GRACE;
+        if !target_info.line_of_sight && !has_lock && !settling {
             commands.entity(entity).remove::<Targeting>();
         }
-    }
-}
-
-/// Builds the pure view of a target from the vision system's observation.
-pub(super) fn build_target_view(info: Option<&TargetInfo>, now: f32) -> Option<TargetView> {
-    info.and_then(|info| {
-        info.distance.is_finite().then_some(TargetView {
-            distance: info.distance,
-            line_of_sight: info.line_of_sight,
-            bearing: info.direction,
-            velocity: info.velocity,
-            seconds_since_targeted: now - info.targeted_at,
-        })
-    })
-}
-
-/// Target distance over each owned capability's reach; `f32::MAX` for a
-/// capability that is missing or has no reach.
-fn build_reach_fractions(
-    target: Option<TargetView>,
-    capability_profiles: &CapabilityProfiles,
-) -> MotionActionTable<Option<f32>> {
-    let Some(target) = target else {
-        return MotionActionTable::default();
-    };
-    let mut reach_fractions = MotionActionTable::splat(Some(f32::MAX));
-    for key in capability_keys() {
-        if let Some(reach) = capability_profiles[key]
-            .and_then(|profile| profile.reach)
-            .filter(|&reach| reach > 0.0)
-        {
-            reach_fractions[key] = Some(target.distance / reach);
-        }
-    }
-    reach_fractions
-}
-
-/// The queries behind each capability's world-allows-use check, shared by
-/// `build_decision_context` and the appliers.
-#[derive(SystemParam)]
-pub(super) struct UseEligibilityQueries<'w, 's> {
-    pub equipment: EquipmentRead<'w, 's>,
-    pub consumables: Query<'w, 's, (), With<Consumable>>,
-    pub items_in_use: Query<'w, 's, (), With<EquipmentInUse>>,
-}
-
-/// Whether the world lets each motion or action run now: usable equipment (or
-/// a held use already running), and a carried potion for `Heal`.
-fn build_use_eligibility_table(
-    entity: Entity,
-    items: Option<&Items>,
-    use_eligibility_queries: &UseEligibilityQueries,
-) -> UseEligibilityTable {
-    let mut use_eligibility = MotionActionTable::splat(true);
-    for slot in EquipmentSlot::ALL {
-        let held_item_in_use = !slot.is_instant_use()
-            && use_eligibility_queries
-                .equipment
-                .item_in_slot(entity, slot)
-                .is_some_and(|item| use_eligibility_queries.items_in_use.contains(item));
-        use_eligibility[Action::Use(slot)] = held_item_in_use
-            || use_eligibility_queries
-                .equipment
-                .can_use(entity, slot)
-                .is_ok();
-    }
-    use_eligibility[Ability::Heal] =
-        find_carried_potion(items, &use_eligibility_queries.consumables).is_some();
-    UseEligibilityTable(use_eligibility)
-}
-
-/// The components one decision reads to build its context.
-#[derive(QueryData)]
-pub(super) struct DecisionInputComponents {
-    entity: Entity,
-    transform: &'static Transform,
-    has_target: Has<Targeting>,
-    target_info: Option<&'static TargetInfo>,
-    health: Option<&'static Health>,
-    mana: Option<&'static Mana>,
-    home_area: Option<&'static HomeArea>,
-    kinematics: Option<&'static Kinematics>,
-    items: Option<&'static Items>,
-}
-
-/// Builds one decision's context from the world, with memory left for the
-/// brain to add.
-pub(super) fn build_decision_context(
-    components: &DecisionInputComponentsItem,
-    capability_profiles: &CapabilityProfiles,
-    use_eligibility_queries: &UseEligibilityQueries,
-    now: f32,
-) -> DecisionContext {
-    let position = components.transform.translation.xy();
-    let target_view = if components.has_target {
-        build_target_view(components.target_info, now)
-    } else {
-        None
-    };
-    let home_area = components.home_area.and_then(|home_area| {
-        Some(HomeAreaView {
-            overshoot_fraction: home_area.overshoot_fraction(position)?,
-            arrived: home_area.distance_from(position) <= home_area.arrival_radius(),
-        })
-    });
-    DecisionContext {
-        self_view: SelfView {
-            health_fraction: components.health.and_then(Health::fraction).unwrap_or(1.0),
-            mana_fraction: components.mana.and_then(Mana::fraction).unwrap_or(1.0),
-            stunned: components.kinematics.is_some_and(Kinematics::is_stunned),
-            home_area,
-        },
-        target_view,
-        reach_fractions: build_reach_fractions(target_view, capability_profiles),
-        use_eligibility: build_use_eligibility_table(
-            components.entity,
-            components.items,
-            use_eligibility_queries,
-        ),
-        memory_view: MemoryView::default(),
     }
 }

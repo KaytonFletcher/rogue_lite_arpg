@@ -1,11 +1,14 @@
 use bevy::prelude::*;
 
-use crate::character::brain::{Ability, Action, Brain, Capability, CapabilityProfile, Targeting};
+use crate::character::brain::{
+    Ability, Action, Brain, Capability, CapabilityKey, CapabilityProfile, Targeting,
+};
 use crate::character::vision::TargetInfo;
 use crate::prelude::*;
 
 /// An innate projectile attack fired from the entity's `Projectiles` template.
 #[derive(Component, Clone, Debug)]
+#[component(immutable)]
 pub struct Breath {
     pub cooldown: f32,
     pub reach: f32,
@@ -22,13 +25,9 @@ impl Breath {
 }
 
 impl Capability for Breath {
-    type Key = Ability;
+    const KEY: CapabilityKey = CapabilityKey::Action(Action::Ability(Ability::Breathe));
 
-    fn key(&self) -> Ability {
-        Ability::Breathe
-    }
-
-    fn capability_profile(&self) -> CapabilityProfile {
+    fn profile(&self) -> CapabilityProfile {
         CapabilityProfile {
             reach: Some(self.reach),
             cooldown: self.cooldown,

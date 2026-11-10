@@ -3,10 +3,10 @@
 use bevy::prelude::*;
 
 use super::{
-    CurrentBehaviorRunId, DecayingSpeedBoost, MotionStep, SteerInput, SteeredCharacter, Steering,
-    report_motion_finished,
+    CurrentBehaviorRunId, DecayingSpeedBoost, MotionStep, Running, SteerInput, SteeredCharacter,
+    Steering, report_motion_finished,
 };
-use crate::character::brain::{Capability, CapabilityProfile, Motion};
+use crate::character::brain::{Capability, CapabilityKey, CapabilityProfile, Motion};
 
 const SWOOP_EXTRA_SPEED: f32 = 1.0;
 const SWOOP_EXIT_TURN: f32 = 2.0 * std::f32::consts::FRAC_PI_3;
@@ -20,7 +20,7 @@ const SWOOP_RECOVERY_TIME: f32 = 0.4;
 /// decaying [`DecayingSpeedBoost`].
 #[derive(Component, Clone, Debug)]
 pub struct Swoop {
-    pub capability_profile: CapabilityProfile,
+    capability_profile: CapabilityProfile,
     pub extra_speed: f32,
     pub exit_turn: f32,
     pass: Option<SwoopPass>,
@@ -57,13 +57,9 @@ impl Swoop {
 }
 
 impl Capability for Swoop {
-    type Key = Motion;
+    const KEY: CapabilityKey = CapabilityKey::Motion(Motion::Swoop);
 
-    fn key(&self) -> Motion {
-        Motion::Swoop
-    }
-
-    fn capability_profile(&self) -> CapabilityProfile {
+    fn profile(&self) -> CapabilityProfile {
         self.capability_profile
     }
 }
@@ -73,7 +69,10 @@ impl Capability for Swoop {
 pub(super) fn apply_swoop(
     time: Res<Time<Virtual>>,
     mut commands: Commands,
-    mut swoopers: Query<(Entity, SteeredCharacter, &mut Swoop, &mut Steering)>,
+    mut swoopers: Query<
+        (Entity, SteeredCharacter, &mut Swoop, &mut Steering),
+        With<Running<Swoop>>,
+    >,
 ) {
     for (entity, character, mut swoop, mut steering) in &mut swoopers {
         if swoop
@@ -241,5 +240,20 @@ impl SwoopPass {
         }
         let passed = (position - self.tracked_target_position).dot(self.entry_bearing) < 0.0;
         passed && target_distance >= self.exit_radius
+    }
+}
+
+/// A swoop cut short eases off its pass's boost.
+pub(super) fn on_swoop_released(
+    released: On<Remove<Running<Swoop>>>,
+    mut commands: Commands,
+    mut swoopers: Query<&mut Swoop>,
+) {
+    if let Ok(mut swoop) = swoopers.get_mut(released.entity)
+        && let Some(decaying_speed_boost) = swoop.end_pass()
+    {
+        commands
+            .entity(released.entity)
+            .try_insert(decaying_speed_boost);
     }
 }

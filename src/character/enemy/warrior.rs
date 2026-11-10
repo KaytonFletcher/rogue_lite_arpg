@@ -9,7 +9,7 @@ use crate::character::brain::considerations::{
 };
 use crate::character::brain::{
     Ability, Action, Behavior, BrainDefinition, CommitPolicy, Consideration, ConsiderationInput,
-    Curve, Dash, Heal, Interval, Motion,
+    Curve, Dash, Heal, Interval, Motion, Targets,
 };
 use crate::prelude::*;
 
@@ -62,13 +62,17 @@ const FLEE: Behavior = Behavior::new(
     7.0,
     &[HAS_TARGET, BADLY_HURT],
 );
+// The melee behaviors score every hostile in sight, so a warrior turns on
+// whoever is in reach: holding (5) beats chasing (4) a target out of reach.
+// Out of reach of all of them, it keeps chasing its focus, which comes first.
 const CHASE_MELEE: Behavior = Behavior::new(
     Some(Motion::Chase),
     None,
     CommitPolicy::ContinuouslyScored,
     4.0,
     &[OUTSIDE_MELEE_REACH],
-);
+)
+.with_targets(Targets::Hostiles);
 
 /// Stands still in melee reach instead of orbiting.
 const HOLD_IN_MELEE_REACH: Behavior = Behavior::new(
@@ -77,7 +81,8 @@ const HOLD_IN_MELEE_REACH: Behavior = Behavior::new(
     CommitPolicy::ContinuouslyScored,
     5.0,
     &[INSIDE_MELEE_REACH],
-);
+)
+.with_targets(Targets::Hostiles);
 
 /// Runs out the break rolled after a swing.
 const WARRIOR_KITE: Behavior = Behavior::new(
@@ -130,7 +135,8 @@ static WARRIOR_BEHAVIORS: &[Behavior] = &[
         CommitPolicy::ContinuouslyScored,
         1.0,
         &[IN_MAINHAND_REACH, NOT_DASHING],
-    ),
+    )
+    .with_targets(Targets::Hostiles),
     // The two heals: drink only at a safe distance, or with no target.
     Behavior::new(
         None,

@@ -1,11 +1,14 @@
 use bevy::prelude::*;
 
-use crate::character::brain::{Ability, Action, Brain, Capability, CapabilityProfile, Targeting};
+use crate::character::brain::{
+    Ability, Action, Brain, Capability, CapabilityKey, CapabilityProfile, Targeting,
+};
 use crate::character::vision::TargetInfo;
 use crate::prelude::*;
 
 /// Contact damage on a target within reach.
 #[derive(Component, Clone, Copy, Debug)]
+#[component(immutable)]
 pub struct Bite {
     pub reach: f32,
     pub damage: f32,
@@ -34,13 +37,9 @@ impl Bite {
 }
 
 impl Capability for Bite {
-    type Key = Ability;
+    const KEY: CapabilityKey = CapabilityKey::Action(Action::Ability(Ability::Bite));
 
-    fn key(&self) -> Ability {
-        Ability::Bite
-    }
-
-    fn capability_profile(&self) -> CapabilityProfile {
+    fn profile(&self) -> CapabilityProfile {
         CapabilityProfile {
             reach: Some(self.reach),
             cooldown: self.cooldown,

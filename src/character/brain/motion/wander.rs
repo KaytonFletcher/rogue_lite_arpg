@@ -5,8 +5,8 @@ use std::f32::consts::TAU;
 use bevy::prelude::*;
 use rand::RngExt;
 
-use super::{SteerInput, SteeredCharacter, Steering};
-use crate::character::brain::{Capability, CapabilityProfile, Interval, Motion};
+use super::{Running, SteerInput, SteeredCharacter, Steering};
+use crate::character::brain::{Capability, CapabilityKey, Interval, Motion};
 
 const WANDER_SPEED_SCALE: f32 = 0.4;
 
@@ -34,6 +34,11 @@ impl WanderPhase {
     }
 }
 
+/// Owning it is all a decision needs; its settings only steer.
+impl Capability for Wander {
+    const KEY: CapabilityKey = CapabilityKey::Motion(Motion::Wander);
+}
+
 impl Wander {
     pub fn new(pause: Interval, walk: Interval) -> Self {
         Self {
@@ -54,27 +59,21 @@ impl Wander {
     }
 }
 
-/// Makes `Motion::Wander` available only to a character that carries one.
-impl Capability for Wander {
-    type Key = Motion;
-
-    fn key(&self) -> Motion {
-        Motion::Wander
-    }
-
-    fn capability_profile(&self) -> CapabilityProfile {
-        CapabilityProfile::default()
-    }
-}
-
 /// Ambles inside the home area while the brain holds [`Motion::Wander`].
 pub(super) fn apply_wander(
     time: Res<Time<Virtual>>,
-    mut wanderers: Query<(SteeredCharacter, &mut Wander, &mut Steering)>,
+    mut wanderers: Query<(
+        SteeredCharacter,
+        &mut Wander,
+        &mut Steering,
+        Ref<Running<Wander>>,
+    )>,
 ) {
-    for (character, mut wander, mut steering) in &mut wanderers {
-        if character.brain.motion() != Some(Motion::Wander) {
+    for (character, mut wander, mut steering, running) in &mut wanderers {
+        if running.is_added() {
             wander.leave_wander();
+        }
+        if character.brain.motion() != Some(Motion::Wander) {
             continue;
         }
         *steering =

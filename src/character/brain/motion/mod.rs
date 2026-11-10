@@ -9,6 +9,8 @@ mod step;
 mod swoop;
 mod wander;
 
+use std::marker::PhantomData;
+
 use bevy::prelude::*;
 
 pub use self::dash::Dash;
@@ -153,8 +155,55 @@ const _: () = {
     }
 };
 
+/// Marks a character whose brain holds the motion that capability `C` carries
+/// out, so `C`'s system visits only them. The decision keeps it in step with
+/// the motion slot; `Added` tells a system a new hold began.
+#[derive(Component, Debug)]
+pub(super) struct Running<C: Component>(PhantomData<C>);
+
+impl<C: Component> Default for Running<C> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+/// Moves the [`Running`] marker from `previous` to `current` when the held
+/// motion's kind changes. Motions without a component of their own need none.
+pub(super) fn mark_running_motion(
+    entity: &mut EntityCommands,
+    previous: Option<Motion>,
+    current: Option<Motion>,
+) {
+    if previous.map(Motion::index) == current.map(Motion::index) {
+        return;
+    }
+    if previous.is_some() {
+        entity.remove::<(
+            Running<Wander>,
+            Running<Orbit>,
+            Running<Dash>,
+            Running<Swoop>,
+        )>();
+    }
+    match current {
+        Some(Motion::Wander) => {
+            entity.insert(Running::<Wander>::default());
+        }
+        Some(Motion::Orbit(_)) => {
+            entity.insert(Running::<Orbit>::default());
+        }
+        Some(Motion::Dash) => {
+            entity.insert(Running::<Dash>::default());
+        }
+        Some(Motion::Swoop) => {
+            entity.insert(Running::<Swoop>::default());
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(
+    app.add_observer(swoop::on_swoop_released).add_systems(
         Update,
         (
             dash::apply_dash,

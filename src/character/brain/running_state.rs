@@ -2,7 +2,6 @@
 
 use bevy::prelude::*;
 
-use super::perception::DecisionContext;
 use super::{Action, ActionFinished, ActionOutcome, Motion};
 
 /// Longest a committed behavior may run, a safety net against a missing finish.
@@ -16,6 +15,8 @@ const COMMIT_TIMEOUT: f32 = 3.0;
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RunningBehavior {
     pub(super) behavior: usize,
+    /// The target it won against; `None` for a behavior that needs none.
+    pub(super) target: Option<Entity>,
     pub(super) motion: Option<Motion>,
     pub(super) action: Option<Action>,
     pub(super) behavior_run_id: u32,
@@ -53,14 +54,16 @@ impl RunningBehavior {
         })
     }
 
+    /// Whether a committed behavior lost its target or it is no longer the
+    /// `focus`, was stunned, or timed out.
     pub(super) fn should_drop_committed_behavior(
         &self,
-        context: &DecisionContext,
+        focus: Option<Entity>,
+        stunned: bool,
         now: f32,
     ) -> bool {
-        self.committed
-            && (context.target_view.is_none()
-                || context.self_view.stunned
-                || now - self.started_at > COMMIT_TIMEOUT)
+        let target_lost =
+            focus.is_none() || self.target.is_some_and(|target| Some(target) != focus);
+        self.committed && (target_lost || stunned || now - self.started_at > COMMIT_TIMEOUT)
     }
 }

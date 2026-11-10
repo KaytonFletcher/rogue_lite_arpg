@@ -1,11 +1,14 @@
-//! What an entity can do, read from its capability components: one shared
-//! trait, the per-motion-and-action table and its keys, and the tables built
-//! from every capability the entity carries.
+//! What an entity can do: the per-motion-and-action table, the [`Capability`]
+//! components that carry motions and actions out, and the [`Capabilities`]
+//! cache of their profiles and of equipped items' reach that decisions read.
+//!
+//! To add a capability: implement [`Capability`] for its component and register
+//! it in [`plugin`]. Nothing in the decision code changes.
 
-use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 
-use super::action::{Ability, AbilityCapabilities, Action};
+use super::BrainSystems;
+use super::action::{Ability, Action, Bite, Breath, Heal};
 use super::motion::{Dash, Motion, Orbit, Swoop, Wander};
 use crate::prelude::*;
 
@@ -38,12 +41,6 @@ impl MotionActionKey for Ability {
 #[derive(Clone, Copy, Debug)]
 pub struct MotionActionTable<T>([T; Motion::COUNT + Action::COUNT]);
 
-impl<T: Copy> MotionActionTable<T> {
-    pub fn splat(value: T) -> Self {
-        Self([value; Motion::COUNT + Action::COUNT])
-    }
-}
-
 impl<T: Default> Default for MotionActionTable<T> {
     fn default() -> Self {
         Self(std::array::from_fn(|_| T::default()))
@@ -64,23 +61,8 @@ impl<T, K: MotionActionKey> std::ops::IndexMut<K> for MotionActionTable<T> {
     }
 }
 
-/// Which motions and actions may start right now.
-#[derive(Deref, Clone, Copy, Debug)]
-pub struct AvailableMotionActionTable(pub MotionActionTable<bool>);
-
-/// Which motions and actions the world lets run right now: usable equipment
-/// and a carried potion for `Heal`. One input to [`AvailableMotionActionTable`].
-#[derive(Deref, Clone, Copy, Debug)]
-pub struct UseEligibilityTable(pub MotionActionTable<bool>);
-
-impl Default for UseEligibilityTable {
-    fn default() -> Self {
-        Self(MotionActionTable::splat(true))
-    }
-}
-
-/// What the decision tick needs to know about one capability, copied from the
-/// component that carries it out so scoring never reaches into its running state.
+/// What the decision needs to know about one capability, cached in
+/// [`Capabilities`] from the component that carries it out.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CapabilityProfile {
     pub reach: Option<f32>,
@@ -100,9 +82,9 @@ impl Default for CapabilityProfile {
     }
 }
 
-/// A motion or action that only runs when a capability fills its entry.
+/// The motion or action a capability component carries out.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum CapabilityKey {
+pub enum CapabilityKey {
     Motion(Motion),
     Action(Action),
 }
@@ -116,78 +98,246 @@ impl MotionActionKey for CapabilityKey {
     }
 }
 
-/// Every key a capability can fill: each motion that needs a component to
-/// steer, each equipment slot's use and each ability. `Action::Idle` needs none.
-pub(super) fn capability_keys() -> impl Iterator<Item = CapabilityKey> {
-    let motions = Motion::ALL.iter().copied().filter(|motion| match motion {
-        Motion::Wander | Motion::Orbit(_) | Motion::Dash | Motion::Swoop => true,
-        Motion::Chase
-        | Motion::ReturnToHome
-        | Motion::Flee
-        | Motion::KeepDistance(_)
-        | Motion::Idle => false,
-    });
-    let actions = EquipmentSlot::ALL
-        .into_iter()
-        .map(Action::Use)
-        .chain(Ability::ALL.into_iter().map(Action::Ability));
-    motions
-        .map(CapabilityKey::Motion)
-        .chain(actions.map(CapabilityKey::Action))
+/// A component that lets its entity run one motion or action.
+///
+/// Its [`profile`](Self::profile) is cached in [`Capabilities`] when the
+/// component is inserted and cleared when it is removed, so it must not change
+/// in place: insert a new component to change it. A component with no running
+/// state is `#[component(immutable)]` to enforce that; one with running state
+/// keeps its profile private.
+pub trait Capability: Component {
+    /// The table entry this component fills. A payload in a `Motion` key only
+    /// stands in, since the table indexes by variant.
+    const KEY: CapabilityKey;
+
+    /// What a decision reads of this capability.
+    fn profile(&self) -> CapabilityProfile {
+        CapabilityProfile::default()
+    }
 }
 
-/// A capability component: which `MotionActionTable` entry it fills and its [`CapabilityProfile`].
-pub(super) trait Capability {
-    type Key: MotionActionKey;
-    fn key(&self) -> Self::Key;
-    fn capability_profile(&self) -> CapabilityProfile;
+/// The profile of each motion and action this entity can run, `None` for the
+/// ones it can't. Motions steered without a component and `Action::Idle` are
+/// always owned; the rest are filled from [`Capability`] components and, for
+/// `Action::Use`, from the item equipped in the slot. Only their observers and
+/// [`cache_equipment_profiles`] write it, so it is never removed on its own: a
+/// re-added table would forget the components already on the entity.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Capabilities(MotionActionTable<Option<CapabilityProfile>>);
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        let mut table = MotionActionTable::<Option<CapabilityProfile>>::default();
+        for &motion in Motion::ALL {
+            let always_owned = match motion {
+                Motion::Chase
+                | Motion::ReturnToHome
+                | Motion::Flee
+                | Motion::KeepDistance(_)
+                | Motion::Idle => true,
+                Motion::Wander | Motion::Orbit(_) | Motion::Dash | Motion::Swoop => false,
+            };
+            if always_owned {
+                table[motion] = Some(CapabilityProfile::default());
+            }
+        }
+        table[Action::Idle] = Some(CapabilityProfile::default());
+        Self(table)
+    }
 }
 
-/// Each carried capability's profile; `None` where the entity has none.
-#[derive(Deref, Clone, Copy, Debug, Default)]
-pub(super) struct CapabilityProfiles(pub MotionActionTable<Option<CapabilityProfile>>);
+impl Capabilities {
+    /// The profile of the capability that carries out `key`; `None` when the
+    /// entity lacks it.
+    pub fn get(&self, key: impl MotionActionKey) -> Option<CapabilityProfile> {
+        self.0[key]
+    }
 
-/// Every capability component an entity may carry.
-#[derive(QueryData)]
-pub(super) struct CapabilityComponents {
-    entity: Entity,
-    dash: Option<&'static Dash>,
-    swoop: Option<&'static Swoop>,
-    orbit: Option<&'static Orbit>,
-    wander: Option<&'static Wander>,
-    abilities: AbilityCapabilities,
+    fn set(&mut self, key: impl MotionActionKey, profile: Option<CapabilityProfile>) {
+        self.0[key] = profile;
+    }
 }
 
-pub(super) fn record_capability_profile<C: Capability>(
-    capability_profiles: &mut CapabilityProfiles,
-    component: Option<&C>,
+pub(super) fn plugin(app: &mut App) {
+    app.add_observer(clear_mainhand_profile)
+        .add_observer(clear_offhand_profile)
+        .add_systems(
+            Update,
+            cache_equipment_profiles.in_set(BrainSystems::Perception),
+        );
+    register::<Wander>(app);
+    register::<Orbit>(app);
+    register::<Dash>(app);
+    register::<Swoop>(app);
+    register::<Heal>(app);
+    register::<Breath>(app);
+    register::<Bite>(app);
+}
+
+/// Keeps `C`'s entry in [`Capabilities`] in step with the component, and makes
+/// `C` bring a [`Capabilities`] so the entry has somewhere to go.
+fn register<C: Capability>(app: &mut App) {
+    app.register_required_components::<C, Capabilities>();
+    app.add_observer(cache_profile::<C>)
+        .add_observer(clear_profile::<C>);
+}
+
+fn cache_profile<C: Capability>(
+    inserted: On<Insert<C>>,
+    mut owners: Query<(&C, &mut Capabilities)>,
 ) {
-    if let Some(component) = component {
-        capability_profiles.0[component.key()] = Some(component.capability_profile());
+    if let Ok((capability, mut capabilities)) = owners.get_mut(inserted.entity) {
+        capabilities.set(C::KEY, Some(capability.profile()));
     }
 }
 
-/// Collects the profile of every capability the entity carries. Each equipped
-/// item is a capability with the item's own reach.
-pub(super) fn build_capability_profiles(
-    components: &CapabilityComponentsItem,
-    equipment: &EquipmentRead,
-) -> CapabilityProfiles {
-    let mut capability_profiles = CapabilityProfiles::default();
-    for slot in EquipmentSlot::ALL {
-        capability_profiles.0[Action::Use(slot)] = equipment
-            .equippable_in_slot(components.entity, slot)
-            .map(|equippable| CapabilityProfile {
-                reach: equippable.reach,
-                ..CapabilityProfile::default()
-            });
+fn clear_profile<C: Capability>(removed: On<Remove<C>>, mut owners: Query<&mut Capabilities>) {
+    if let Ok(mut capabilities) = owners.get_mut(removed.entity) {
+        capabilities.set(C::KEY, None);
     }
-    record_capability_profile(&mut capability_profiles, components.dash);
-    record_capability_profile(&mut capability_profiles, components.swoop);
-    record_capability_profile(&mut capability_profiles, components.orbit);
-    record_capability_profile(&mut capability_profiles, components.wander);
-    components
-        .abilities
-        .record_capability_profiles(&mut capability_profiles);
-    capability_profiles
+}
+
+/// Caches the reach of each slot's item for holders whose equipment changed,
+/// and for new tables. An item's reach is read when it is equipped, so it must
+/// not change while equipped. A slot with no usable item reads `None`.
+fn cache_equipment_profiles(
+    mut holders: Query<
+        (Option<&Mainhand>, Option<&Offhand>, &mut Capabilities),
+        Or<(Changed<Mainhand>, Changed<Offhand>, Added<Capabilities>)>,
+    >,
+    items: Query<&Equippable, (With<Equipped>, With<ItemOf>)>,
+) {
+    for (mainhand, offhand, mut capabilities) in &mut holders {
+        for slot in EquipmentSlot::ALL {
+            let profile = slot
+                .equipped(mainhand, offhand)
+                .and_then(|item| items.get(item).ok())
+                .map(|equippable| CapabilityProfile {
+                    reach: equippable.reach,
+                    ..CapabilityProfile::default()
+                });
+            capabilities.set(Action::Use(slot), profile);
+        }
+    }
+}
+
+/// An emptied slot clears at once, so no decision reads a stale reach. A newly
+/// equipped item's reach arrives at the next [`cache_equipment_profiles`] run.
+fn clear_mainhand_profile(removed: On<Remove<Mainhand>>, mut owners: Query<&mut Capabilities>) {
+    if let Ok(mut capabilities) = owners.get_mut(removed.entity) {
+        capabilities.set(Action::Use(EquipmentSlot::Mainhand), None);
+    }
+}
+
+fn clear_offhand_profile(removed: On<Remove<Offhand>>, mut owners: Query<&mut Capabilities>) {
+    if let Ok(mut capabilities) = owners.get_mut(removed.entity) {
+        capabilities.set(Action::Use(EquipmentSlot::Offhand), None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+
+    static POSES: DirectionalPoses = DirectionalPoses {
+        up: EquipmentPose::above(0.0, 0.0, 0.0),
+        down: EquipmentPose::above(0.0, 0.0, 0.0),
+        left: EquipmentPose::above(0.0, 0.0, 0.0),
+        right: EquipmentPose::above(0.0, 0.0, 0.0),
+    };
+
+    fn app() -> App {
+        let mut app = App::new();
+        plugin(&mut app);
+        app.world_mut().flush();
+        app
+    }
+
+    #[test]
+    fn steered_motions_and_idle_are_always_owned() {
+        let capabilities = Capabilities::default();
+        assert!(
+            capabilities.get(Motion::Chase).is_some(),
+            "chase needs no component"
+        );
+        assert!(
+            capabilities.get(Action::Idle).is_some(),
+            "idle needs no capability"
+        );
+        assert!(
+            capabilities.get(Motion::Dash).is_none(),
+            "dash needs its component"
+        );
+        assert!(
+            capabilities.get(Ability::Bite).is_none(),
+            "bite needs its component"
+        );
+    }
+
+    #[test]
+    fn inserting_a_capability_caches_its_profile() {
+        let mut app = app();
+        let bite = Bite::new(30.0, 5.0, 2.0);
+        let entity = app.world_mut().spawn(bite).id();
+        let capabilities = app
+            .world()
+            .get::<Capabilities>(entity)
+            .expect("a capability brings its table");
+        assert_eq!(
+            capabilities.get(Ability::Bite),
+            Some(bite.profile()),
+            "the observer caches the inserted profile"
+        );
+    }
+
+    #[test]
+    fn reinserting_replaces_and_removing_clears() {
+        let mut app = app();
+        let entity = app.world_mut().spawn(Bite::new(30.0, 5.0, 2.0)).id();
+        let longer = Bite::new(60.0, 5.0, 2.0);
+        app.world_mut().entity_mut(entity).insert(longer);
+        let reach = |app: &App| {
+            app.world()
+                .get::<Capabilities>(entity)
+                .and_then(|capabilities| capabilities.get(Ability::Bite))
+                .and_then(|profile| profile.reach)
+        };
+        assert_eq!(reach(&app), Some(60.0), "a re-insert replaces the profile");
+        app.world_mut().entity_mut(entity).remove::<Bite>();
+        assert_eq!(reach(&app), None, "a removal clears it");
+    }
+
+    #[test]
+    fn equipped_reach_is_cached_and_an_emptied_slot_clears() {
+        let mut app = app();
+        let holder = app.world_mut().spawn(Capabilities::default()).id();
+        let equippable = Equippable::new(EquipmentSlot::Mainhand, 0.4, &POSES).with_reach(40.0);
+        let item = app
+            .world_mut()
+            .spawn((equippable, Equipped, ItemOf { holder }))
+            .id();
+        {
+            let mut commands = app.world_mut().commands();
+            EquipmentSlot::Mainhand.place_in_slot(&mut commands.entity(item), holder);
+        }
+        app.world_mut().flush();
+        app.world_mut()
+            .run_system_once(cache_equipment_profiles)
+            .expect("the cache system runs");
+        let reach = |app: &App| {
+            app.world()
+                .get::<Capabilities>(holder)
+                .and_then(|capabilities| capabilities.get(Action::Use(EquipmentSlot::Mainhand)))
+                .and_then(|profile| profile.reach)
+        };
+        assert_eq!(
+            reach(&app),
+            Some(40.0),
+            "an equipped item's reach is cached"
+        );
+        app.world_mut().despawn(item);
+        assert_eq!(reach(&app), None, "an emptied slot clears at once");
+    }
 }

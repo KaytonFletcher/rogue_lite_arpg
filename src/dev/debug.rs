@@ -236,6 +236,12 @@ fn append_score_trace(label: &mut String, brain: &Brain, score_trace: &ScoreTrac
             let _ = write!(label, ": {}", reason.label());
             continue;
         }
+        if let Some(target) = explanation
+            .target
+            .filter(|_| behavior.targets == Targets::Hostiles)
+        {
+            let _ = write!(label, " @{target}");
+        }
         let _ = write!(label, ": {}", format_value(explanation.score));
         if explanation.momentum > 1.0 {
             let _ = write!(label, " (x{:.2})", explanation.momentum);
