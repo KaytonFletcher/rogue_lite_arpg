@@ -285,3 +285,18 @@ impl TileKind {
         !self.blocks_ground() && self.should_render()
     }
 }
+
+/// A mark painted over the ground on its own layer. It changes how the ground looks, not
+/// whether it can be walked on or spawned on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GroundMark {
+    /// Torn earth: a broken lip, a dark wall and a sick seam at the bottom.
+    Fissure,
+    /// Burnt ground: ash that thins into scattered flecks.
+    Scorch,
+}
+
+impl GroundMark {
+    /// Every ground mark, in draw order.
+    pub const ALL: [Self; 2] = [Self::Fissure, Self::Scorch];
+}

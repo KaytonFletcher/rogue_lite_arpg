@@ -82,6 +82,8 @@ pub enum ZLayer {
     Ground,
     OnGround,
     InAir,
+    /// Low haze over the map: above characters, below projectiles.
+    Haze,
 
     SpriteBackground,
     BehindSprite,
@@ -95,6 +97,7 @@ impl ZLayer {
             Self::Ground => 0.0,
             Self::OnGround => 5.0,
             Self::InAir => 10.0,
+            Self::Haze => 8.0,
 
             // Z layer is additive in parent/child hierarchies
             // Parent 1 + child entity weapon of 0.1 = 1.1
