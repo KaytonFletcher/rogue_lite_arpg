@@ -221,7 +221,8 @@ fn cache_equipment_profiles(
     }
 }
 
-/// An emptied slot clears at once, so no decision reads a stale reach.
+/// An emptied slot clears at once, so no decision reads a stale reach. A newly
+/// equipped item's reach arrives at the next [`cache_equipment_profiles`] run.
 fn clear_mainhand_profile(removed: On<Remove<Mainhand>>, mut owners: Query<&mut Capabilities>) {
     if let Ok(mut capabilities) = owners.get_mut(removed.entity) {
         capabilities.set(Action::Use(EquipmentSlot::Mainhand), None);
@@ -236,7 +237,16 @@ fn clear_offhand_profile(removed: On<Remove<Offhand>>, mut owners: Query<&mut Ca
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
     use super::*;
+
+    static POSES: DirectionalPoses = DirectionalPoses {
+        up: EquipmentPose::above(0.0, 0.0, 0.0),
+        down: EquipmentPose::above(0.0, 0.0, 0.0),
+        left: EquipmentPose::above(0.0, 0.0, 0.0),
+        right: EquipmentPose::above(0.0, 0.0, 0.0),
+    };
 
     fn app() -> App {
         let mut app = App::new();
@@ -297,5 +307,37 @@ mod tests {
         assert_eq!(reach(&app), Some(60.0), "a re-insert replaces the profile");
         app.world_mut().entity_mut(entity).remove::<Bite>();
         assert_eq!(reach(&app), None, "a removal clears it");
+    }
+
+    #[test]
+    fn equipped_reach_is_cached_and_an_emptied_slot_clears() {
+        let mut app = app();
+        let holder = app.world_mut().spawn(Capabilities::default()).id();
+        let equippable = Equippable::new(EquipmentSlot::Mainhand, 0.4, &POSES).with_reach(40.0);
+        let item = app
+            .world_mut()
+            .spawn((equippable, Equipped, ItemOf { holder }))
+            .id();
+        {
+            let mut commands = app.world_mut().commands();
+            EquipmentSlot::Mainhand.place_in_slot(&mut commands.entity(item), holder);
+        }
+        app.world_mut().flush();
+        app.world_mut()
+            .run_system_once(cache_equipment_profiles)
+            .expect("the cache system runs");
+        let reach = |app: &App| {
+            app.world()
+                .get::<Capabilities>(holder)
+                .and_then(|capabilities| capabilities.get(Action::Use(EquipmentSlot::Mainhand)))
+                .and_then(|profile| profile.reach)
+        };
+        assert_eq!(
+            reach(&app),
+            Some(40.0),
+            "an equipped item's reach is cached"
+        );
+        app.world_mut().despawn(item);
+        assert_eq!(reach(&app), None, "an emptied slot clears at once");
     }
 }

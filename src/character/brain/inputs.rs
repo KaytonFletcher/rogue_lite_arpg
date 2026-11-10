@@ -85,8 +85,8 @@ pub(super) struct DecisionInputComponents {
     capabilities: &'static Capabilities,
 }
 
-/// The queries behind equipment profiles, the world-allows-use checks, and the
-/// facts about targets other than the focus.
+/// The queries behind the world-allows-use checks and the facts about targets
+/// other than the focus.
 #[derive(SystemParam)]
 pub(super) struct DecisionQueries<'w, 's> {
     equipment: EquipmentRead<'w, 's>,
