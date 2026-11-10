@@ -65,6 +65,7 @@ pub(super) fn apply_burning(
 }
 
 /// Flames licking up around the burning character.
+#[expect(unused_braces, reason = "bsn! takes expression arguments in braces")]
 fn burn_vfx(
     sprites: &SpriteAssets,
     sprite_layouts: &SpriteSheetLayouts,

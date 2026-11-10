@@ -201,6 +201,7 @@ fn amount_lost_in_pixels(previous_amount: f32, current_amount: f32, pixel_width:
     px((current_pixels + pixel_change).max(0.0))
 }
 
+#[expect(unused_braces, reason = "bsn! takes expression arguments in braces")]
 fn experience_bar() -> impl Scene {
     // Tick marks splitting the bar into tenths.
     let ticks: Vec<_> = (1..10)

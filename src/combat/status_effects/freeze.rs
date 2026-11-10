@@ -24,6 +24,7 @@ pub(super) fn apply_frozen(
 }
 
 /// A sheet of ice under the frozen character's feet.
+#[expect(unused_braces, reason = "bsn! takes expression arguments in braces")]
 fn grounded_ice_vfx(sprites: &SpriteAssets, status: Entity) -> impl Scene {
     let image = sprites.grounded_ice.clone();
     bsn! {
