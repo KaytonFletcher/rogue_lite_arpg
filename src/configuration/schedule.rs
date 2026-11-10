@@ -1,6 +1,6 @@
 use avian2d::prelude::{Physics, PhysicsTime};
 use bevy::prelude::*;
-use bevy_asset_loader::loading_state::LoadingStateSet;
+use bevy_asset_loader::loading_state::LoadingStateSystems;
 
 pub(super) fn plugin(app: &mut App) {
     // initialize states
@@ -16,7 +16,8 @@ pub(super) fn plugin(app: &mut App) {
             MainSystems::Shared,
         )
             .chain()
-            .after(LoadingStateSet(AppState::AssetLoading)), // appease the system ordering gods
+            // appease the system ordering gods
+            .after(LoadingStateSystems(AppState::AssetLoading)),
     );
 
     // Must order per-schedule, so same as above but for FixedUpdate systems
@@ -37,6 +38,7 @@ pub(super) fn plugin(app: &mut App) {
             InGameSystems::Collision,
             InGameSystems::Vfx,
             InGameSystems::HudOverlay,
+            InGameSystems::Measure,
         )
             .chain()
             .in_set(MainSystems::InGame),
@@ -89,6 +91,8 @@ pub enum InGameSystems {
     Vfx,
     /// UI overlay drawn from the simulation results.
     HudOverlay,
+    /// Diagnostics measured from the finished frame, such as entity and decision counts.
+    Measure,
 }
 
 /// Ordered phases within [`InGameSystems::Simulation`].

@@ -53,6 +53,7 @@ fn spawn_tiles(
     tiles: &TileAssets,
     coordinates: &TileToWorld,
 ) {
+    let _span = info_span!("map::spawn_tiles").entered();
     let map_size = blueprint.map_size();
     let grid_size: TilemapGridSize = coordinates.tile_size.into();
     let tilemap_entity = commands.spawn_empty().id();
@@ -120,7 +121,7 @@ fn spawn_tiles(
 // ---------------------------------------------------------------------------
 
 /// Collider marker for map geometry that is removed when gameplay ends.
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 #[require(DespawnOnExit::<AppState>(AppState::Playing))]
 pub struct MapCollider;
 
@@ -132,20 +133,21 @@ fn spawn_colliders(
     for rect in derive_collider_rects(&blueprint.tiles) {
         let (position, size) = coordinates.tile_rectangle_to_world_rectangle(rect);
 
-        commands.spawn((
-            RigidBody::Static,
-            Collider::rectangle(size.x, size.y),
-            Transform::from_xyz(position.x, position.y, ZLayer::OnGround.z()),
-            MapCollider,
-            CollisionLayers::new(
+        commands.spawn_scene(bsn! {
+            MapCollider
+            ~RigidBody::Static
+            ~Collider::rectangle(size.x, size.y)
+            Transform::from_xyz(position.x, position.y, {ZLayer::OnGround.z()})
+            ~CollisionLayers::new(
                 GameCollisionLayer::HighObstacle,
                 GameCollisionLayer::HIGH_OBSTACLE_FILTERS,
-            ),
-        ));
+            )
+        });
     }
 }
 
 fn derive_collider_rects(tiles: &TileGrid<TileKind>) -> Vec<TileRect> {
+    let _span = info_span!("map::derive_collider_rects").entered();
     let map_width = i32::try_from(tiles.size().x).expect("map width fits in i32");
     let map_height = i32::try_from(tiles.size().y).expect("map height fits in i32");
 
@@ -249,7 +251,7 @@ fn spawn_placements(
             }
             PlacementKind::Chest => chests.push(world_spawn_position),
             PlacementKind::Exit => {
-                commands.spawn(portal(&sprites, world_spawn_position));
+                commands.spawn_scene(portal(&sprites, world_spawn_position));
             }
         }
     }

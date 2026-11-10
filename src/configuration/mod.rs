@@ -1,15 +1,15 @@
 mod assets;
-#[cfg(feature = "dev")]
-pub mod debug;
 mod physics;
 mod schedule;
 mod view;
 
 #[cfg(not(feature = "dev"))]
 use bevy::asset::AssetMetaCheck;
+#[cfg(feature = "dev")]
+use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::EnhancedInputPlugin;
-use bevy_lit::prelude::Lighting2dPlugin;
+use bevy_firefly::prelude::FireflyPlugin;
 use bevy_tweening::TweeningPlugin;
 
 pub mod prelude {
@@ -19,12 +19,26 @@ pub mod prelude {
         AppState, InGameSystems, MainSystems, PauseState, PlayingState, Restart, SimulationSystems,
         VfxSystems,
     };
-    pub use super::view::{CHARACTER_FEET_POS_OFFSET, YSort, ZLayer, shadow};
+    #[cfg(feature = "dev")]
+    pub use super::view::draw_camera_debug_gizmos;
+    pub use super::view::{CHARACTER_FEET_POS_OFFSET, YSort, ZLayer, point_light, shadow};
 }
 
 pub(super) fn plugin(app: &mut App) {
     #[cfg(feature = "dev")]
-    app.add_plugins(debug::plugin);
+    app.add_plugins(
+        DefaultPlugins
+            .set(LogPlugin {
+                level: Level::INFO,
+                // update game dev project to info or another when you get tired of debug
+                filter: "wgpu=error,baba_yaga=debug".to_string(),
+                ..default()
+            })
+            .set(view::window_plugin())
+            .set(ImagePlugin::default_nearest())
+            // Panics at startup without `bevy_pbr`: https://github.com/bevyengine/bevy/issues/25980
+            .disable::<bevy::dev_tools::render_debug::RenderDebugOverlayPlugin>(),
+    );
 
     #[cfg(not(feature = "dev"))]
     app.add_plugins(
@@ -49,5 +63,5 @@ pub(super) fn plugin(app: &mut App) {
     ));
 
     // Third-party plugins
-    app.add_plugins((EnhancedInputPlugin, Lighting2dPlugin, TweeningPlugin));
+    app.add_plugins((EnhancedInputPlugin, FireflyPlugin, TweeningPlugin));
 }

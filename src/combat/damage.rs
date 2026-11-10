@@ -59,23 +59,23 @@ impl Default for Damage {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 #[require(Sensor)]
 pub struct HurtBox;
 
-pub fn hurtbox(size: Vec2, membership: GameCollisionLayer) -> impl Bundle {
+pub fn hurtbox(size: Vec2, membership: GameCollisionLayer) -> impl Scene {
     hurtbox_at(size, membership, HURTBOX_OFFSET)
 }
 
 /// Hurtbox with a custom vertical centre, for sheets whose body does not sit
 /// at the humanoid offset.
-pub fn hurtbox_at(size: Vec2, membership: GameCollisionLayer, y_offset: f32) -> impl Bundle {
-    (
-        HurtBox,
-        Collider::rectangle(size.x, size.y),
-        Transform::from_xyz(0.0, y_offset, 0.0),
-        CollisionLayers::new(membership, [GameCollisionLayer::HitBox]),
-    )
+pub fn hurtbox_at(size: Vec2, membership: GameCollisionLayer, y_offset: f32) -> impl Scene {
+    bsn! {
+        HurtBox
+        ~Collider::rectangle(size.x, size.y)
+        Transform::from_xyz(0.0, y_offset, 0.0)
+        ~CollisionLayers::new(membership, [GameCollisionLayer::HitBox])
+    }
 }
 
 /// Default hurtbox centre relative to the character transform.
@@ -141,6 +141,7 @@ pub(super) fn on_attempt_damage(
     hurt_box_query: Query<&ChildOf, With<HurtBox>>,
     mut damaged_query: Query<(&mut Health, Option<&mut IFrames>)>,
     source_query: Query<&Effects>,
+    #[cfg(feature = "dev_tools")] invincible_query: Query<(), With<Invincible>>,
 ) {
     // Damage can be applied to an entities hurtbox, or to the entity directly
     let damaged_entity = if let Ok(child_of) = hurt_box_query.get(attempt_damage.entity) {
@@ -150,6 +151,11 @@ pub(super) fn on_attempt_damage(
     } else {
         return;
     };
+
+    #[cfg(feature = "dev_tools")]
+    if invincible_query.contains(damaged_entity) {
+        return;
+    }
 
     if let Ok((mut health, has_iframes)) = damaged_query.get_mut(damaged_entity) {
         // Entities have to "opt-in" to having iframes. Right now that is only the player
@@ -241,7 +247,7 @@ pub(super) fn tick_and_remove_damage_flash(
         });
 }
 
-#[derive(Component, Clone)]
+#[derive(Component, Default, Clone)]
 pub struct Knockback(pub f32);
 
 pub(super) fn on_damage_dealt_knockback(
