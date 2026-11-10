@@ -85,17 +85,97 @@ pub(super) struct DecisionInputComponents {
     capabilities: &'static Capabilities,
 }
 
-/// The queries behind the world-allows-use checks and the facts about targets
-/// other than the focus.
+/// The world a decision reads beyond its own entity, by concern. A new check
+/// goes into the group it belongs to, or a new group here.
 #[derive(SystemParam)]
 pub(super) struct DecisionQueries<'w, 's> {
+    uses: UseChecks<'w, 's>,
+    targets: TargetScan<'w, 's>,
+}
+
+/// Whether the world lets an action run now.
+#[derive(SystemParam)]
+pub(super) struct UseChecks<'w, 's> {
     equipment: EquipmentRead<'w, 's>,
     consumables: Query<'w, 's, (), With<Consumable>>,
     items_in_use: Query<'w, 's, (), With<EquipmentInUse>>,
+}
+
+impl UseChecks<'_, '_> {
+    /// Whether the world lets `entity`, carrying `items`, run `action` now:
+    /// usable equipment (or a held use already running), and a carried potion
+    /// for `Heal`.
+    fn allow(&self, entity: Entity, items: Option<&Items>, action: Action) -> bool {
+        match action {
+            Action::Use(slot) => {
+                let held_item_in_use = !slot.is_instant_use()
+                    && self
+                        .equipment
+                        .item_in_slot(entity, slot)
+                        .is_some_and(|item| self.items_in_use.contains(item));
+                held_item_in_use || self.equipment.can_use(entity, slot).is_ok()
+            }
+            Action::Ability(Ability::Heal) => {
+                find_carried_potion(items, &self.consumables).is_some()
+            }
+            Action::Ability(Ability::Breathe | Ability::Bite) | Action::Idle => true,
+        }
+    }
+}
+
+/// The characters a decision may pick as targets besides its focus, and the
+/// sight-ray check they must pass.
+#[derive(SystemParam)]
+pub(super) struct TargetScan<'w, 's> {
     /// Every living character: each one carries a `CombatSide`.
     characters: Query<'w, 's, (Entity, &'static Transform, &'static CombatSide), With<Health>>,
     children: Query<'w, 's, &'static Children>,
     spatial: SpatialQuery<'w, 's>,
+}
+
+impl TargetScan<'_, '_> {
+    /// Each living character not on `side` within `range` of `position`, with
+    /// its position and distance.
+    fn opposing_within(
+        &self,
+        side: CombatSide,
+        position: Vec2,
+        range: f32,
+    ) -> impl Iterator<Item = (Entity, Vec2, f32)> {
+        self.characters
+            .iter()
+            .filter(move |&(_, _, &other_side)| other_side != side)
+            .map(move |(entity, transform, _)| {
+                let target_position = transform.translation.xy();
+                (entity, target_position, target_position.distance(position))
+            })
+            .filter(move |&(_, _, distance)| distance <= range)
+    }
+
+    /// Whether a ray with the sight ray's settings reaches `target` or one of
+    /// its child colliders, as the vision system checks the focus.
+    fn sight_ray_reaches(&self, ray_caster: &RayCaster, target: Entity, position: Vec2) -> bool {
+        let origin = ray_caster.global_origin();
+        let Ok(direction) = Dir2::new(position - origin) else {
+            // Standing on the target: nothing can be in the way.
+            return true;
+        };
+        self.spatial
+            .cast_ray(
+                origin,
+                direction,
+                ray_caster.max_distance,
+                ray_caster.solid,
+                &ray_caster.query_filter,
+            )
+            .is_some_and(|hit| {
+                hit.entity == target
+                    || self
+                        .children
+                        .get(target)
+                        .is_ok_and(|children| children.contains(&hit.entity))
+            })
+    }
 }
 
 /// What one decision knows about a target it may pick.
@@ -184,9 +264,10 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         // A focus switched to moments ago has no line of sight until the turned
         // sight ray reports, so cast for it rather than let an older target win.
         let line_of_sight = match ray_caster {
-            Some(ray_caster) if seconds_since_targeted < SIGHT_GRACE => {
-                self.sight_ray_reaches(ray_caster, focus, info.position)
-            }
+            Some(ray_caster) if seconds_since_targeted < SIGHT_GRACE => self
+                .queries
+                .targets
+                .sight_ray_reaches(ray_caster, focus, info.position),
             _ => info.line_of_sight,
         };
         hostiles.push(
@@ -203,18 +284,15 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         if !gather_others || self.item.locked {
             return hostiles;
         }
+        let scan = &self.queries.targets;
         let position = self.item.transform.translation.xy();
-        for (entity, transform, other_side) in &self.queries.characters {
+        for (entity, target_position, distance) in
+            scan.opposing_within(*side, position, ray_caster.max_distance)
+        {
             if hostiles.len == MAX_TARGETS {
                 break;
             }
-            let target_position = transform.translation.xy();
-            let distance = target_position.distance(position);
-            if entity != focus
-                && other_side != side
-                && distance <= ray_caster.max_distance
-                && self.sight_ray_reaches(ray_caster, entity, target_position)
-            {
+            if entity != focus && scan.sight_ray_reaches(ray_caster, entity, target_position) {
                 hostiles.push(
                     entity,
                     TargetFacts {
@@ -235,33 +313,6 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
             focus: self.focus(),
             hostiles: hostiles.as_slice(),
         }
-    }
-
-    /// Whether a ray with the sight ray's settings reaches `target` or one of
-    /// its child colliders, as the vision system checks the focus.
-    fn sight_ray_reaches(&self, ray_caster: &RayCaster, target: Entity, position: Vec2) -> bool {
-        let origin = ray_caster.global_origin();
-        let Ok(direction) = Dir2::new(position - origin) else {
-            // Standing on the target: nothing can be in the way.
-            return true;
-        };
-        self.queries
-            .spatial
-            .cast_ray(
-                origin,
-                direction,
-                ray_caster.max_distance,
-                ray_caster.solid,
-                &ray_caster.query_filter,
-            )
-            .is_some_and(|hit| {
-                hit.entity == target
-                    || self
-                        .queries
-                        .children
-                        .get(target)
-                        .is_ok_and(|children| children.contains(&hit.entity))
-            })
     }
 
     pub fn entity(&self) -> Entity {
@@ -294,27 +345,6 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         self.item.capabilities.get(action)
     }
 
-    /// Whether the world lets `action` run now: usable equipment (or a held use
-    /// already running), and a carried potion for `Heal`.
-    fn can_use(&self, action: Action) -> bool {
-        let entity = self.item.entity;
-        let queries = self.queries;
-        match action {
-            Action::Use(slot) => {
-                let held_item_in_use = !slot.is_instant_use()
-                    && queries
-                        .equipment
-                        .item_in_slot(entity, slot)
-                        .is_some_and(|item| queries.items_in_use.contains(item));
-                held_item_in_use || queries.equipment.can_use(entity, slot).is_ok()
-            }
-            Action::Ability(Ability::Heal) => {
-                find_carried_potion(self.item.items, &queries.consumables).is_some()
-            }
-            Action::Ability(Ability::Breathe | Ability::Bite) | Action::Idle => true,
-        }
-    }
-
     /// Whether `behavior` may start now: each part's capability is owned, off its
     /// cooldown on `brain`, and allowed by the world.
     pub fn is_available(&self, behavior: &Behavior, brain: &Brain) -> bool {
@@ -324,7 +354,10 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         let action_available = |action: Action| {
             self.action_profile(action).is_some()
                 && brain.is_cooldown_ready(action, self.now)
-                && self.can_use(action)
+                && self
+                    .queries
+                    .uses
+                    .allow(self.item.entity, self.item.items, action)
         };
         behavior.motion.is_none_or(motion_available) && behavior.action.is_none_or(action_available)
     }
