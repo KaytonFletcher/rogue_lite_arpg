@@ -3,8 +3,7 @@
 
 use super::behavior::{Behavior, BrainDefinition, MAX_BEHAVIORS};
 use super::scoring::score_behavior;
-use crate::character::brain::capability::AvailableMotionActionTable;
-use crate::character::brain::perception::ConsiderationInput;
+use crate::character::brain::ConsiderationInput;
 
 /// Score multiplier a behavior keeps over challengers while it holds a slot, so
 /// a near-tie does not flip the character back and forth between ticks.
@@ -35,25 +34,19 @@ impl SkipReason {
 /// Scores every behavior not skipped (see [`SkipReason`]), then takes them
 /// from the highest score down while their slots are free; ties go to the
 /// earlier behavior. A `false` from `start` drops a winner for the next best.
-/// `read` answers each consideration's input. Behavior ids, taken and returned,
-/// are indices into `definition.behaviors`.
+/// `read` answers each consideration's input and `available` whether a behavior
+/// may start now. Behavior ids, taken and returned, are indices into
+/// `definition.behaviors`.
 pub fn assign_behaviors_to_slots(
     definition: &BrainDefinition,
     read: &impl Fn(ConsiderationInput) -> Option<f32>,
-    available_motion_action_table: &AvailableMotionActionTable,
+    available: &impl Fn(&Behavior) -> bool,
     running_behavior_ids: &[usize],
     mut start: impl FnMut(usize) -> bool,
 ) -> Vec<usize> {
     let mut scores = [0.0_f32; MAX_BEHAVIORS];
     for (index, behavior) in definition.behaviors.iter().enumerate() {
-        if find_skip_reason(
-            definition,
-            behavior,
-            available_motion_action_table,
-            running_behavior_ids,
-        )
-        .is_some()
-        {
+        if find_skip_reason(definition, behavior, available, running_behavior_ids).is_some() {
             continue;
         }
         let is_current = running_behavior_ids.contains(&index);
@@ -91,7 +84,7 @@ pub fn assign_behaviors_to_slots(
 pub(super) fn find_skip_reason(
     definition: &BrainDefinition,
     behavior: &Behavior,
-    available_motion_action_table: &AvailableMotionActionTable,
+    available: &impl Fn(&Behavior) -> bool,
     running_behavior_ids: &[usize],
 ) -> Option<SkipReason> {
     let tier = behavior.commit.interrupt_tier();
@@ -103,13 +96,7 @@ pub(super) fn find_skip_reason(
     if slot_committed {
         return Some(SkipReason::SlotCommitted);
     }
-    let unavailable = behavior
-        .motion
-        .is_some_and(|motion| !available_motion_action_table[motion])
-        || behavior
-            .action
-            .is_some_and(|action| !available_motion_action_table[action]);
-    unavailable.then_some(SkipReason::Unavailable)
+    (!available(behavior)).then_some(SkipReason::Unavailable)
 }
 
 pub(super) fn momentum_multiplier(is_current: bool) -> f32 {
@@ -119,7 +106,6 @@ pub(super) fn momentum_multiplier(is_current: bool) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::brain::capability::MotionActionTable;
     use crate::character::brain::considerations::distance_threshold;
     use crate::character::brain::{CommitPolicy, Motion};
 
@@ -139,20 +125,31 @@ mod tests {
                 2.0,
                 &[distance_threshold("near", 100.0, 120.0)],
             ),
+            Behavior::new(
+                Some(Motion::Dash),
+                None,
+                CommitPolicy::UntilFinished { interrupt_tier: 1 },
+                3.0,
+                &[],
+            ),
         ],
     };
 
-    fn all_available() -> AvailableMotionActionTable {
-        AvailableMotionActionTable(MotionActionTable::splat(true))
+    /// Everything but the dash may start.
+    fn available(behavior: &Behavior) -> bool {
+        behavior.motion != Some(Motion::Dash)
+    }
+
+    fn read_distance(distance: f32) -> impl Fn(ConsiderationInput) -> Option<f32> {
+        move |input| match input {
+            ConsiderationInput::TargetDistance => Some(distance),
+            _ => Some(1.0),
+        }
     }
 
     #[test]
     fn exit_threshold_keeps_a_running_chase() {
-        let read = |input: ConsiderationInput| match input {
-            ConsiderationInput::TargetDistance => Some(110.0),
-            _ => Some(1.0),
-        };
-        let available = all_available();
+        let read = read_distance(110.0);
         assert_eq!(
             assign_behaviors_to_slots(&BRAIN, &read, &available, &[], |_| true),
             vec![0],
@@ -167,11 +164,21 @@ mod tests {
 
     #[test]
     fn rejected_start_hands_the_slot_to_the_next_best() {
-        let read = |_: ConsiderationInput| Some(50.0);
+        let read = read_distance(50.0);
         assert_eq!(
-            assign_behaviors_to_slots(&BRAIN, &read, &all_available(), &[], |index| index != 1),
+            assign_behaviors_to_slots(&BRAIN, &read, &available, &[], |index| index != 1),
             vec![0],
             "chase wins on score but fails its start, so wander takes the slot"
+        );
+    }
+
+    #[test]
+    fn running_committed_behavior_blocks_its_slot() {
+        let read = read_distance(50.0);
+        assert_eq!(
+            assign_behaviors_to_slots(&BRAIN, &read, &|_: &Behavior| true, &[2], |_| true),
+            Vec::<usize>::new(),
+            "a running committed dash keeps the motion slot from lower tiers"
         );
     }
 }

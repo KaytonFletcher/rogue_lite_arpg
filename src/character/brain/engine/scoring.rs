@@ -1,7 +1,7 @@
 //! How a consideration turns one raw input into a `0.0..=1.0` score.
 
 use super::behavior::Behavior;
-use crate::character::brain::perception::ConsiderationInput;
+use crate::character::brain::ConsiderationInput;
 
 /// An ordered `min < max` interval: a distance range, a consideration's input
 /// range, or a span of seconds to roll from.
@@ -232,6 +232,11 @@ mod tests {
             Some(0.0),
             "a missing input scores zero, inverted or not"
         );
+        assert_eq!(
+            score_consideration(&inverted, Some(0.0), false),
+            Some(1.0),
+            "a present input inverts"
+        );
         let score = score_behavior(&behavior(&[FLAG, GRADED]), &read, false)
             .expect("a veto is a zero score, not an invalid one");
         assert!(score.abs() < f32::EPSILON, "one zero vetoes the behavior");
@@ -248,20 +253,18 @@ mod tests {
     }
 
     #[test]
-    fn threshold_holds_while_current() {
+    fn falling_threshold_passes_at_or_above() {
+        // `exit < enter` passes raw inputs at or above the threshold.
         let mapping = ScoreMapping::Threshold {
-            enter: 100.0,
-            exit: 120.0,
+            enter: 1.0,
+            exit: 0.94,
         };
         assert_eq!(
-            mapping.score_raw_input(110.0, false),
+            mapping.score_raw_input(0.97, false),
             Some(0.0),
-            "past enter"
+            "below enter"
         );
-        assert_eq!(
-            mapping.score_raw_input(110.0, true),
-            Some(1.0),
-            "inside exit"
-        );
+        assert_eq!(mapping.score_raw_input(1.0, false), Some(1.0), "at enter");
+        assert_eq!(mapping.score_raw_input(0.97, true), Some(1.0), "above exit");
     }
 }
