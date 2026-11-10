@@ -1,8 +1,8 @@
-//! Innate abilities. Each is an opt-in capability component, read by the
-//! decision's `DecisionInputs::action_profile`, plus an applier that re-checks the live world for
-//! the brain's held action and reports
-//! [`ActionFinished`](crate::character::brain::ActionFinished). Appliers never change the
-//! motion, and a defeated character loses its brain, so they never see the dead.
+//! Innate abilities. Each is an opt-in [`Capability`](crate::character::brain::Capability)
+//! component, whose profile decisions read from the `Capabilities` cache, plus an applier that
+//! re-checks the live world for the brain's held action and reports
+//! [`ActionFinished`](crate::character::brain::ActionFinished). Appliers never change the motion,
+//! and a defeated character loses its brain, so they never see the dead.
 
 mod bite;
 mod breath;

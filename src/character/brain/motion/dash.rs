@@ -9,7 +9,7 @@ use super::{
     CurrentBehaviorRunId, MotionStep, Running, SteerInput, SteeredCharacter, Steering,
     report_motion_finished,
 };
-use crate::character::brain::{CapabilityProfile, Interval, Motion};
+use crate::character::brain::{Capability, CapabilityKey, CapabilityProfile, Interval, Motion};
 use crate::character::vision::TargetInfo;
 
 /// Speed below which a target counts as holding still rather than orbiting.
@@ -25,7 +25,7 @@ const HOP_OUTWARD_BIAS: f32 = 0.15;
 pub struct Dash {
     pub run_distance: Interval,
     pub speed_multiplier: f32,
-    pub capability_profile: CapabilityProfile,
+    capability_profile: CapabilityProfile,
     aim_rule: DashAimRule,
     debug_name: &'static str,
     progress: DashProgress,
@@ -121,9 +121,10 @@ fn hop_direction(target: &TargetInfo, close_range: f32, heading: Vec2) -> Vec2 {
     (tangent - target.direction * HOP_OUTWARD_BIAS).normalize_or_zero()
 }
 
-impl Dash {
-    /// What a decision reads of this capability.
-    pub fn profile(&self) -> CapabilityProfile {
+impl Capability for Dash {
+    const KEY: CapabilityKey = CapabilityKey::Motion(Motion::Dash);
+
+    fn profile(&self) -> CapabilityProfile {
         self.capability_profile
     }
 }

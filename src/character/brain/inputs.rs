@@ -9,10 +9,10 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::Brain;
-use super::action::{Ability, Action, Bite, Breath, Heal, find_carried_potion};
-use super::capability::CapabilityProfile;
+use super::action::{Ability, Action, find_carried_potion};
+use super::capability::{Capabilities, CapabilityProfile};
 use super::engine::{Behavior, MAX_TARGETS, TargetPools};
-use super::motion::{Dash, HomeArea, Motion, Orbit, Swoop, Wander};
+use super::motion::{HomeArea, Motion};
 use super::perception::{SIGHT_GRACE, TargetLock, Targeting};
 use crate::prelude::*;
 
@@ -66,9 +66,8 @@ pub(super) struct BrainMemory {
     pub attack_finished: bool,
 }
 
-/// The components one decision reads, including every capability an entity may
-/// carry. A new capability component is listed here and read in
-/// [`DecisionInputs::motion_profile`] or [`DecisionInputs::action_profile`].
+/// The components one decision reads. Capability components are not listed:
+/// their profiles arrive through the [`Capabilities`] cache.
 #[derive(QueryData)]
 pub(super) struct DecisionInputComponents {
     entity: Entity,
@@ -83,13 +82,7 @@ pub(super) struct DecisionInputComponents {
     home_area: Option<&'static HomeArea>,
     kinematics: Option<&'static Kinematics>,
     items: Option<&'static Items>,
-    dash: Option<&'static Dash>,
-    swoop: Option<&'static Swoop>,
-    orbit: Option<&'static Orbit>,
-    wander: Option<&'static Wander>,
-    bite: Option<&'static Bite>,
-    breath: Option<&'static Breath>,
-    heal: Option<&'static Heal>,
+    capabilities: &'static Capabilities,
 }
 
 /// The queries behind equipment profiles, the world-allows-use checks, and the
@@ -291,18 +284,7 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
     /// The profile of the capability that carries out `motion`; `None` when the
     /// entity lacks it. Motions steered without a component are always owned.
     pub fn motion_profile(&self, motion: Motion) -> Option<CapabilityProfile> {
-        match motion {
-            // Their components carry no decision settings, only ownership.
-            Motion::Wander => self.item.wander.map(|_| CapabilityProfile::default()),
-            Motion::Orbit(_) => self.item.orbit.map(|_| CapabilityProfile::default()),
-            Motion::Dash => self.item.dash.map(Dash::profile),
-            Motion::Swoop => self.item.swoop.map(Swoop::profile),
-            Motion::Chase
-            | Motion::ReturnToHome
-            | Motion::Flee
-            | Motion::KeepDistance(_)
-            | Motion::Idle => Some(CapabilityProfile::default()),
-        }
+        self.item.capabilities.get(motion)
     }
 
     /// The profile of the capability that carries out `action`: the equipped
@@ -317,10 +299,7 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
                     reach: equippable.reach,
                     ..CapabilityProfile::default()
                 }),
-            Action::Ability(Ability::Heal) => self.item.heal.map(|heal| heal.profile()),
-            Action::Ability(Ability::Breathe) => self.item.breath.map(Breath::profile),
-            Action::Ability(Ability::Bite) => self.item.bite.map(Bite::profile),
-            Action::Idle => Some(CapabilityProfile::default()),
+            Action::Ability(_) | Action::Idle => self.item.capabilities.get(action),
         }
     }
 

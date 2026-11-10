@@ -1,10 +1,13 @@
 use bevy::prelude::*;
 
-use crate::character::brain::{Ability, Action, Brain, CapabilityProfile};
+use crate::character::brain::{
+    Ability, Action, Brain, Capability, CapabilityKey, CapabilityProfile,
+};
 use crate::prelude::*;
 
 /// Drinking carried potions to recover health, paced by `cooldown`.
 #[derive(Component, Clone, Copy, Debug)]
+#[component(immutable)]
 pub struct Heal {
     pub cooldown: f32,
 }
@@ -16,9 +19,10 @@ impl Heal {
     }
 }
 
-impl Heal {
-    /// What a decision reads of this capability.
-    pub fn profile(self) -> CapabilityProfile {
+impl Capability for Heal {
+    const KEY: CapabilityKey = CapabilityKey::Action(Action::Ability(Ability::Heal));
+
+    fn profile(&self) -> CapabilityProfile {
         CapabilityProfile {
             cooldown: self.cooldown,
             ..CapabilityProfile::default()

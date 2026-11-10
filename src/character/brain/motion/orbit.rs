@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use rand::RngExt;
 
 use super::{Running, SteerInput, SteeredCharacter, Steering};
-use crate::character::brain::{Interval, Motion};
+use crate::character::brain::{Capability, CapabilityKey, Interval, Motion};
 
 const ORBIT_REROLL_INTERVAL: Interval = Interval::new(1.5, 2.5);
 const ORBIT_SWITCH_CHANCE: f32 = 0.5;
@@ -36,6 +36,11 @@ pub struct Orbit {
     distance_offset: f32,
     reroll_at: f32,
     direction: Option<OrbitDirection>,
+}
+
+/// Owning it is all a decision needs; its settings only steer.
+impl Capability for Orbit {
+    const KEY: CapabilityKey = CapabilityKey::Motion(Motion::Orbit(Interval::new(0.0, 1.0)));
 }
 
 impl Orbit {

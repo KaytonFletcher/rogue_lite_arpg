@@ -11,18 +11,18 @@
 //! 1. [`motion`]: a `Motion` variant only for a new steering contract. A stateless one gets an arm
 //!    in `direct::steer_direct_motion`; one with state gets a file with its component and an
 //!    `apply_` system registered in `motion::plugin`, and is skipped in `apply_direct_steering`. A
-//!    component the motion needs is listed in `DecisionInputComponents` and read in
-//!    `DecisionInputs::motion_profile`.
+//!    component the motion needs implements [`Capability`] and is registered in
+//!    `capability::plugin`.
 //! 2. A [`ConsiderationInput`] variant and its arm in `DecisionInputs::read`, reading a field of
 //!    `DecisionInputComponents` (add one for a new component).
 //! 3. Behaviors over it in `character/enemy` and `character/npc`.
 //!
-//! A finite [`Motion`] needs a variant, a component with a `profile()` whose
+//! A finite [`Motion`] needs a variant, a [`Capability`] component whose
 //! `apply_` system follows its run with a `CurrentBehaviorRunId` and reports
-//! `MotionFinished`, the same registration and listing, and a committed
-//! behavior over it. A new [`Ability`] needs a variant, a component in
-//! `action::ability` with a `profile()`, listed in `DecisionInputComponents` and
-//! read in `DecisionInputs::action_profile`, an applier, and behaviors over it.
+//! `MotionFinished`, the same registrations, and a committed behavior over it.
+//! A new [`Ability`] needs a variant, a [`Capability`] component in
+//! `action::ability` registered in `capability::plugin`, an applier, and
+//! behaviors over it.
 
 mod action;
 mod capability;
@@ -41,8 +41,8 @@ use bevy::prelude::*;
 
 use self::action::StartedEquipmentUses;
 pub use self::action::{Ability, Action, ActionFinished, ActionOutcome, Bite, Breath, Heal};
-pub use self::capability::CapabilityProfile;
-use self::capability::{MotionActionKey, MotionActionTable};
+use self::capability::{Capabilities, MotionActionKey, MotionActionTable};
+pub use self::capability::{Capability, CapabilityKey, CapabilityProfile};
 use self::decide::DecisionClock;
 pub use self::decide::ScoreTrace;
 pub(crate) use self::engine::{Behavior, CommitPolicy, Consideration, Curve};
@@ -67,7 +67,7 @@ use crate::prelude::*;
 /// action systems read it and answer with
 /// [`MotionFinished`](motion::MotionFinished) or [`ActionFinished`].
 #[derive(Component, Debug)]
-#[require(StartedEquipmentUses, Steering, DecisionClock)]
+#[require(StartedEquipmentUses, Steering, DecisionClock, Capabilities)]
 pub struct Brain {
     definition: &'static BrainDefinition,
     running_behaviors: Vec<RunningBehavior>,
@@ -283,11 +283,16 @@ pub(super) fn plugin(app: &mut App) {
         ),
     );
 
-    app.add_plugins((perception::plugin, action::plugin, motion::plugin))
-        .add_observer(decide::on_release_finished_motion)
-        .add_observer(decide::on_finish_action)
-        .add_systems(
-            Update,
-            decide::decide_behavior.in_set(BrainSystems::Decision),
-        );
+    app.add_plugins((
+        capability::plugin,
+        perception::plugin,
+        action::plugin,
+        motion::plugin,
+    ))
+    .add_observer(decide::on_release_finished_motion)
+    .add_observer(decide::on_finish_action)
+    .add_systems(
+        Update,
+        decide::decide_behavior.in_set(BrainSystems::Decision),
+    );
 }

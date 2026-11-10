@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use rand::RngExt;
 
 use super::{Running, SteerInput, SteeredCharacter, Steering};
-use crate::character::brain::{Interval, Motion};
+use crate::character::brain::{Capability, CapabilityKey, Interval, Motion};
 
 const WANDER_SPEED_SCALE: f32 = 0.4;
 
@@ -32,6 +32,11 @@ impl WanderPhase {
             Self::Walking { until } | Self::Pausing { until } => until,
         }
     }
+}
+
+/// Owning it is all a decision needs; its settings only steer.
+impl Capability for Wander {
+    const KEY: CapabilityKey = CapabilityKey::Motion(Motion::Wander);
 }
 
 impl Wander {

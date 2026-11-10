@@ -6,7 +6,7 @@ use super::{
     CurrentBehaviorRunId, DecayingSpeedBoost, MotionStep, Running, SteerInput, SteeredCharacter,
     Steering, report_motion_finished,
 };
-use crate::character::brain::{CapabilityProfile, Motion};
+use crate::character::brain::{Capability, CapabilityKey, CapabilityProfile, Motion};
 
 const SWOOP_EXTRA_SPEED: f32 = 1.0;
 const SWOOP_EXIT_TURN: f32 = 2.0 * std::f32::consts::FRAC_PI_3;
@@ -20,7 +20,7 @@ const SWOOP_RECOVERY_TIME: f32 = 0.4;
 /// decaying [`DecayingSpeedBoost`].
 #[derive(Component, Clone, Debug)]
 pub struct Swoop {
-    pub capability_profile: CapabilityProfile,
+    capability_profile: CapabilityProfile,
     pub extra_speed: f32,
     pub exit_turn: f32,
     pass: Option<SwoopPass>,
@@ -56,9 +56,10 @@ impl Swoop {
     }
 }
 
-impl Swoop {
-    /// What a decision reads of this capability.
-    pub fn profile(&self) -> CapabilityProfile {
+impl Capability for Swoop {
+    const KEY: CapabilityKey = CapabilityKey::Motion(Motion::Swoop);
+
+    fn profile(&self) -> CapabilityProfile {
         self.capability_profile
     }
 }
