@@ -250,8 +250,9 @@ fn redecide_now(
     let running = brain.running_picks();
     let hostiles = inputs.hostiles();
     let pools = inputs.pools(&hostiles);
-    let read =
-        |input: ConsiderationInput, target: Option<Entity>| inputs.read(input, target, memory);
+    let read = |input: ConsiderationInput, target: Option<Entity>| {
+        inputs.read(input, hostiles.facts(target), memory)
+    };
     let available = |behavior: &Behavior| inputs.is_available(behavior, brain);
     if let Some(score_trace) = score_trace {
         #[cfg(feature = "tracy")]

@@ -13,7 +13,7 @@ use super::action::{Ability, Action, Bite, Breath, Heal, find_carried_potion};
 use super::capability::CapabilityProfile;
 use super::engine::{Behavior, MAX_TARGETS, TargetPools};
 use super::motion::{Dash, HomeArea, Motion, Orbit, Swoop, Wander};
-use super::perception::Targeting;
+use super::perception::{TargetLock, Targeting};
 use crate::prelude::*;
 
 /// The raw fact a consideration reads; see [`DecisionInputs::read`].
@@ -38,6 +38,26 @@ pub enum ConsiderationInput {
     SecondsSinceTargeted,
 }
 
+impl ConsiderationInput {
+    /// Whether this input is about the target, so it reads differently per target.
+    pub const fn is_about_target(self) -> bool {
+        match self {
+            Self::HasTarget
+            | Self::LineOfSight
+            | Self::TargetDistance
+            | Self::MotionReachFraction(_)
+            | Self::ActionReachFraction(_)
+            | Self::SecondsSinceTargeted => true,
+            Self::MissingHealth
+            | Self::ManaFraction
+            | Self::MotionRunning(_)
+            | Self::Circling
+            | Self::HomeAreaPull
+            | Self::AttackFinished => false,
+        }
+    }
+}
+
 /// The brain's own earlier choices, as scoring reads them.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct BrainMemory {
@@ -54,6 +74,7 @@ pub(super) struct DecisionInputComponents {
     entity: Entity,
     transform: &'static Transform,
     targeting: Option<&'static Targeting>,
+    locked: Has<TargetLock>,
     target_info: Option<&'static TargetInfo>,
     side: Option<&'static CombatSide>,
     ray_caster: Option<&'static RayCaster>,
@@ -78,29 +99,48 @@ pub(super) struct DecisionQueries<'w, 's> {
     equipment: EquipmentRead<'w, 's>,
     consumables: Query<'w, 's, (), With<Consumable>>,
     items_in_use: Query<'w, 's, (), With<EquipmentInUse>>,
-    /// Every character: each one carries a `CombatSide`.
-    characters: Query<'w, 's, (Entity, &'static Transform, &'static CombatSide)>,
+    /// Every living character: each one carries a `CombatSide`.
+    characters: Query<'w, 's, (Entity, &'static Transform, &'static CombatSide), With<Health>>,
     children: Query<'w, 's, &'static Children>,
     spatial: SpatialQuery<'w, 's>,
 }
 
-/// The hostiles one decision may pick from: the focus, then up to
-/// [`MAX_TARGETS`] in all of the opposing side within sight range.
+/// What one decision knows about a target it may pick.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TargetFacts {
+    distance: f32,
+    line_of_sight: bool,
+    seconds_since_targeted: f32,
+}
+
+/// The targets one decision may pick from and their facts, gathered once: the
+/// focus, then up to [`MAX_TARGETS`] in all of the opposing side in sight.
 pub(super) struct Hostiles {
     entities: [Entity; MAX_TARGETS],
+    facts: [TargetFacts; MAX_TARGETS],
     len: usize,
 }
 
 impl Hostiles {
-    fn push(&mut self, entity: Entity) {
+    fn push(&mut self, entity: Entity, facts: TargetFacts) {
         if self.len < MAX_TARGETS {
             self.entities[self.len] = entity;
+            self.facts[self.len] = facts;
             self.len += 1;
         }
     }
 
     pub fn as_slice(&self) -> &[Entity] {
         &self.entities[..self.len]
+    }
+
+    /// The facts about `target`; `None` for no target or one not gathered.
+    pub fn facts(&self, target: Option<Entity>) -> Option<&TargetFacts> {
+        let index = self
+            .as_slice()
+            .iter()
+            .position(|&entity| Some(entity) == target)?;
+        Some(&self.facts[index])
     }
 }
 
@@ -128,27 +168,55 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
             .map(|targeting| targeting.0)
     }
 
-    /// Every hostile this brain may pick while it has a focus: the focus first,
-    /// then other characters of the opposing side within its sight range.
+    /// The targets this brain may pick while it has a focus: the focus first,
+    /// then other living characters of the opposing side its sight ray reaches.
+    /// Only the focus while an aggro [`TargetLock`] holds it.
     pub fn hostiles(&self) -> Hostiles {
+        let unknown = TargetFacts {
+            distance: f32::INFINITY,
+            line_of_sight: false,
+            seconds_since_targeted: 0.0,
+        };
         let mut hostiles = Hostiles {
             entities: [Entity::PLACEHOLDER; MAX_TARGETS],
+            facts: [unknown; MAX_TARGETS],
             len: 0,
         };
-        let Some(focus) = self.focus() else {
+        let (Some(focus), Some(info)) = (self.focus(), self.target()) else {
             return hostiles;
         };
-        hostiles.push(focus);
+        hostiles.push(
+            focus,
+            TargetFacts {
+                distance: info.distance,
+                line_of_sight: info.line_of_sight,
+                seconds_since_targeted: self.now - info.targeted_at,
+            },
+        );
         let (Some(side), Some(ray_caster)) = (self.item.side, self.item.ray_caster) else {
             return hostiles;
         };
-        let position = self.position();
+        if self.item.locked {
+            return hostiles;
+        }
+        let position = self.item.transform.translation.xy();
         for (entity, transform, other_side) in &self.queries.characters {
+            let target_position = transform.translation.xy();
+            let distance = target_position.distance(position);
             if entity != focus
                 && other_side != side
-                && transform.translation.xy().distance(position) <= ray_caster.max_distance
+                && distance <= ray_caster.max_distance
+                && self.sight_ray_reaches(ray_caster, entity, target_position)
             {
-                hostiles.push(entity);
+                hostiles.push(
+                    entity,
+                    TargetFacts {
+                        distance,
+                        line_of_sight: true,
+                        // Switching to it would start its clock now.
+                        seconds_since_targeted: 0.0,
+                    },
+                );
             }
         }
         hostiles
@@ -162,66 +230,31 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         }
     }
 
-    fn position(&self) -> Vec2 {
-        self.item.transform.translation.xy()
-    }
-
-    /// Whether `target` is the focus, whose facts come from `TargetInfo`.
-    fn is_focus(&self, target: Entity) -> bool {
-        self.item
-            .targeting
-            .is_some_and(|targeting| targeting.0 == target)
-    }
-
-    /// Distance to `target`; `None` when it is gone or not at a finite distance.
-    fn target_distance(&self, target: Option<Entity>) -> Option<f32> {
-        let target = target?;
-        if self.is_focus(target) {
-            return self.target().map(|info| info.distance);
-        }
-        let (_, transform, _) = self.queries.characters.get(target).ok()?;
-        Some(transform.translation.xy().distance(self.position())).filter(|d| d.is_finite())
-    }
-
-    /// Whether the sight ray reaches `target`. The focus reads the vision
-    /// system's ray; another target casts one with the same settings.
-    fn line_of_sight(&self, target: Option<Entity>) -> Option<bool> {
-        let target = target?;
-        if self.is_focus(target) {
-            return self.target().map(|info| info.line_of_sight);
-        }
-        let (_, transform, _) = self.queries.characters.get(target).ok()?;
-        let ray_caster = self.item.ray_caster?;
+    /// Whether a ray with the sight ray's settings reaches `target` or one of
+    /// its child colliders, as the vision system checks the focus.
+    fn sight_ray_reaches(&self, ray_caster: &RayCaster, target: Entity, position: Vec2) -> bool {
         let origin = ray_caster.global_origin();
-        let Ok(direction) = Dir2::new(transform.translation.xy() - origin) else {
+        let Ok(direction) = Dir2::new(position - origin) else {
             // Standing on the target: nothing can be in the way.
-            return Some(true);
+            return true;
         };
-        let hit = self.queries.spatial.cast_ray(
-            origin,
-            direction,
-            ray_caster.max_distance,
-            ray_caster.solid,
-            &ray_caster.query_filter,
-        );
-        Some(hit.is_some_and(|hit| {
-            hit.entity == target
-                || self
-                    .queries
-                    .children
-                    .get(target)
-                    .is_ok_and(|children| children.contains(&hit.entity))
-        }))
-    }
-
-    /// Seconds since the focus was targeted; another target reads zero, as
-    /// switching to it would start its clock now.
-    fn seconds_since_targeted(&self, target: Option<Entity>) -> Option<f32> {
-        let target = target?;
-        if self.is_focus(target) {
-            return self.target().map(|info| self.now - info.targeted_at);
-        }
-        self.queries.characters.contains(target).then_some(0.0)
+        self.queries
+            .spatial
+            .cast_ray(
+                origin,
+                direction,
+                ray_caster.max_distance,
+                ray_caster.solid,
+                &ray_caster.query_filter,
+            )
+            .is_some_and(|hit| {
+                hit.entity == target
+                    || self
+                        .queries
+                        .children
+                        .get(target)
+                        .is_ok_and(|children| children.contains(&hit.entity))
+            })
     }
 
     pub fn entity(&self) -> Entity {
@@ -312,20 +345,19 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         behavior.motion.is_none_or(motion_available) && behavior.action.is_none_or(action_available)
     }
 
-    /// Answers `input` about `target`; `None` when it is absent, which vetoes the
-    /// behavior. Inputs about the character itself ignore `target`.
+    /// Answers `input` about the target `facts` describe; `None` when it is
+    /// absent, which vetoes the behavior. Inputs about the character itself
+    /// ignore `target`.
     pub fn read(
         &self,
         input: ConsiderationInput,
-        target: Option<Entity>,
+        target: Option<&TargetFacts>,
         memory: BrainMemory,
     ) -> Option<f32> {
         match input {
-            ConsiderationInput::HasTarget => {
-                Some(f32::from(self.target_distance(target).is_some()))
-            }
-            ConsiderationInput::LineOfSight => self.line_of_sight(target).map(f32::from),
-            ConsiderationInput::TargetDistance => self.target_distance(target),
+            ConsiderationInput::HasTarget => Some(f32::from(target.is_some())),
+            ConsiderationInput::LineOfSight => target.map(|target| f32::from(target.line_of_sight)),
+            ConsiderationInput::TargetDistance => target.map(|target| target.distance),
             ConsiderationInput::MissingHealth => {
                 Some(1.0 - self.item.health.and_then(Health::fraction).unwrap_or(1.0))
             }
@@ -343,13 +375,15 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
             ))),
             ConsiderationInput::HomeAreaPull => self.home_area_pull(memory),
             ConsiderationInput::AttackFinished => Some(f32::from(memory.attack_finished)),
-            ConsiderationInput::MotionReachFraction(motion) => self
-                .target_distance(target)
-                .map(|distance| reach_fraction(distance, self.motion_profile(motion))),
-            ConsiderationInput::ActionReachFraction(action) => self
-                .target_distance(target)
-                .map(|distance| reach_fraction(distance, self.action_profile(action))),
-            ConsiderationInput::SecondsSinceTargeted => self.seconds_since_targeted(target),
+            ConsiderationInput::MotionReachFraction(motion) => {
+                target.map(|target| reach_fraction(target.distance, self.motion_profile(motion)))
+            }
+            ConsiderationInput::ActionReachFraction(action) => {
+                target.map(|target| reach_fraction(target.distance, self.action_profile(action)))
+            }
+            ConsiderationInput::SecondsSinceTargeted => {
+                target.map(|target| target.seconds_since_targeted)
+            }
         }
     }
 

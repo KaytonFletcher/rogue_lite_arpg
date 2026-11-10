@@ -44,6 +44,14 @@ impl Behavior {
         Self { targets, ..self }
     }
 
+    /// Whether any consideration reads the target. A behavior that reads none
+    /// scores once, with no target, whatever its pool.
+    pub fn reads_target(&self) -> bool {
+        self.considerations
+            .iter()
+            .any(|consideration| consideration.input.is_about_target())
+    }
+
     /// Whether both behaviors claim the motion slot or both claim the action slot.
     pub fn shares_a_slot_with(&self, other: &Self) -> bool {
         (self.motion.is_some() && other.motion.is_some())

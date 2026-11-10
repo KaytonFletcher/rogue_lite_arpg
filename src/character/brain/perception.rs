@@ -189,30 +189,54 @@ fn on_damage_aggro(
 }
 
 /// Starts the targeting clock when a new entity is targeted; re-inserts of the
-/// same target from repeated hits keep it. A switch also points `TargetInfo` at
-/// the new target at once, so motions and actions this frame aim at it.
+/// same target from repeated hits keep it. When the sight ray was aimed at
+/// another entity, also turns the tracking, aim and ray to the new target at
+/// once, so motions and actions this frame aim at it. Its line of sight reads
+/// false until the turned ray reports, which [`SIGHT_GRACE`] covers.
 fn on_targeting_inserted(
     inserted: On<Insert<Targeting>>,
     time: Res<Time<Virtual>>,
-    mut trackers: Query<(&mut TargetInfo, &Transform, &Targeting)>,
+    mut trackers: Query<(
+        &mut TargetInfo,
+        &Transform,
+        &Targeting,
+        Option<&Watching>,
+        Option<&mut Vision>,
+        Option<&mut RayCaster>,
+    )>,
     targets: Query<(&Transform, Option<&Kinematics>)>,
 ) {
-    let Ok((mut target_info, transform, targeting)) = trackers.get_mut(inserted.entity) else {
+    let Ok((mut target_info, transform, targeting, watching, vision, ray_caster)) =
+        trackers.get_mut(inserted.entity)
+    else {
         return;
     };
     let target = targeting.0;
     if target_info.targeted == Some(target) {
         return;
     }
+    let tracked = target_info.targeted.or(watching.map(|watching| watching.0));
     target_info.targeted = Some(target);
     target_info.targeted_at = time.elapsed_secs();
-    if let Ok((target_transform, target_kinematics)) = targets.get(target) {
-        let position = transform.translation.xy();
-        let target_position = target_transform.translation.xy();
-        target_info.direction = (target_position - position).normalize_or_zero();
-        target_info.distance = target_position.distance(position);
-        target_info.position = target_position;
-        target_info.velocity = target_kinematics.map_or(Vec2::ZERO, Kinematics::velocity);
+    if tracked == Some(target) {
+        return;
+    }
+    let Ok((target_transform, target_kinematics)) = targets.get(target) else {
+        return;
+    };
+    let position = transform.translation.xy();
+    let target_position = target_transform.translation.xy();
+    let direction = (target_position - position).normalize_or_zero();
+    target_info.direction = direction;
+    target_info.distance = target_position.distance(position);
+    target_info.position = target_position;
+    target_info.velocity = target_kinematics.map_or(Vec2::ZERO, Kinematics::velocity);
+    target_info.line_of_sight = false;
+    if let Some(mut vision) = vision {
+        vision.aim_direction = direction;
+    }
+    if let Some(mut ray_caster) = ray_caster {
+        ray_caster.direction = Dir2::new(direction).unwrap_or(Dir2::X);
     }
 }
 

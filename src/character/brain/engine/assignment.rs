@@ -57,7 +57,7 @@ pub fn assign_behaviors_to_slots<T: Copy + PartialEq>(
         if find_skip_reason(definition, behavior, available, running).is_some() {
             continue;
         }
-        for (column, target) in pools.candidates(behavior.targets).enumerate() {
+        for (column, target) in pools.candidates(behavior).enumerate() {
             let is_current = running.contains(&Pick {
                 behavior: index,
                 target,
@@ -70,7 +70,11 @@ pub fn assign_behaviors_to_slots<T: Copy + PartialEq>(
     }
 
     let mut winners: Vec<Pick<T>> = Vec::with_capacity(2);
-    let mut chosen_target: Option<T> = None;
+    // A committed behavior still running keeps its target, so the rest agree with it.
+    let mut chosen_target = running
+        .iter()
+        .filter(|running| definition.behaviors[running.behavior].commit.is_committed())
+        .find_map(|running| running.target);
     loop {
         let mut best: Option<(Pick<T>, f32)> = None;
         for (index, behavior) in definition.behaviors.iter().enumerate() {
@@ -80,7 +84,7 @@ pub fn assign_behaviors_to_slots<T: Copy + PartialEq>(
             if taken {
                 continue;
             }
-            for (column, target) in pools.candidates(behavior.targets).enumerate() {
+            for (column, target) in pools.candidates(behavior).enumerate() {
                 let score = scores[index][column];
                 let agrees = target.is_none() || chosen_target.is_none() || target == chosen_target;
                 if agrees && score > best.map_or(0.0, |(_, leader)| leader) {
@@ -131,10 +135,11 @@ pub(super) fn momentum_multiplier(is_current: bool) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::brain::considerations::distance_threshold;
+    use crate::character::brain::considerations::{distance_threshold, flag};
     use crate::character::brain::{Ability, Action, CommitPolicy, Consideration, Motion, Targets};
 
     const NEAR: Consideration = distance_threshold("near", 100.0, 120.0);
+    const HAS_TARGET: Consideration = flag("has target", ConsiderationInput::HasTarget);
 
     static BRAIN: BrainDefinition = BrainDefinition {
         behaviors: &[
@@ -234,7 +239,6 @@ mod tests {
     #[test]
     fn running_committed_behavior_yields_only_to_a_higher_tier() {
         let read = read_distance(50.0);
-        let all = |_: &Behavior| true;
         let running = untargeted(&[2]);
         assert_eq!(
             assign_behaviors_to_slots(&BRAIN, &NO_TARGETS, &read, &all, &running, |index| {
@@ -266,7 +270,7 @@ mod tests {
                 Some(Action::Ability(Ability::Bite)),
                 CommitPolicy::ContinuouslyScored,
                 1.0,
-                &[],
+                &[HAS_TARGET],
             ),
             Behavior::new(
                 None,
@@ -284,8 +288,13 @@ mod tests {
             (ConsiderationInput::TargetDistance, Some(1)) => Some(150.0),
             (ConsiderationInput::TargetDistance, Some(_)) => Some(50.0),
             (ConsiderationInput::TargetDistance, None) => None,
+            (ConsiderationInput::HasTarget, target) => Some(f32::from(target.is_some())),
             _ => Some(1.0),
         }
+    }
+
+    fn all(_: &Behavior) -> bool {
+        true
     }
 
     #[test]
@@ -294,7 +303,6 @@ mod tests {
             focus: Some(1),
             hostiles: &[1, 2],
         };
-        let all = |_: &Behavior| true;
         let winners =
             assign_behaviors_to_slots(&PER_TARGET, &pools, &read_per_target, &all, &[], |_| true);
         assert_eq!(
@@ -320,7 +328,6 @@ mod tests {
             focus: Some(2),
             hostiles: &[2, 3],
         };
-        let all = |_: &Behavior| true;
         let running = [Pick {
             behavior: 0,
             target: Some(3),
@@ -340,6 +347,89 @@ mod tests {
                 target: Some(3),
             }),
             "an equal score elsewhere does not pull the chase off its running target"
+        );
+    }
+
+    #[test]
+    fn empty_hostile_pool_scores_once_without_a_target() {
+        static ALONE: BrainDefinition = BrainDefinition {
+            behaviors: &[Behavior::new(
+                Some(Motion::Wander),
+                None,
+                CommitPolicy::ContinuouslyScored,
+                1.0,
+                &[HAS_TARGET.inverted("no target")],
+            )
+            .with_targets(Targets::Hostiles)],
+        };
+        assert_eq!(
+            assign_behaviors_to_slots(&ALONE, &NO_TARGETS, &read_per_target, &all, &[], |_| true),
+            untargeted(&[0]),
+            "with no hostiles a no-target consideration passes"
+        );
+    }
+
+    #[test]
+    fn failed_start_drops_every_target_of_the_behavior() {
+        let pools = TargetPools {
+            focus: Some(2),
+            hostiles: &[2, 3],
+        };
+        let winners =
+            assign_behaviors_to_slots(&PER_TARGET, &pools, &read_per_target, &all, &[], |index| {
+                index != 0
+            });
+        assert!(
+            winners.iter().all(|winner| winner.behavior != 0),
+            "a chase that fails its start wins against no other target either"
+        );
+    }
+
+    #[test]
+    fn focus_winner_restricts_later_hostile_behaviors() {
+        static FOCUSED: BrainDefinition = BrainDefinition {
+            behaviors: &[
+                Behavior::new(
+                    Some(Motion::Chase),
+                    None,
+                    CommitPolicy::ContinuouslyScored,
+                    3.0,
+                    &[HAS_TARGET],
+                ),
+                Behavior::new(
+                    None,
+                    Some(Action::Ability(Ability::Bite)),
+                    CommitPolicy::ContinuouslyScored,
+                    2.0,
+                    &[NEAR],
+                )
+                .with_targets(Targets::Hostiles),
+                Behavior::new(
+                    None,
+                    Some(Action::Idle),
+                    CommitPolicy::ContinuouslyScored,
+                    0.1,
+                    &[],
+                ),
+            ],
+        };
+        let pools = TargetPools {
+            focus: Some(1),
+            hostiles: &[1, 2],
+        };
+        assert_eq!(
+            assign_behaviors_to_slots(&FOCUSED, &pools, &read_per_target, &all, &[], |_| true),
+            vec![
+                Pick {
+                    behavior: 0,
+                    target: Some(1),
+                },
+                Pick {
+                    behavior: 2,
+                    target: None,
+                },
+            ],
+            "the chase fixes target 1, so the bite may not take the nearer target 2"
         );
     }
 }

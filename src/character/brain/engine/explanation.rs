@@ -58,7 +58,7 @@ pub fn explain_behavior<T: Copy + PartialEq>(
         };
     }
     let mut best: Option<BehaviorScoreExplanation<T>> = None;
-    for target in pools.candidates(behavior.targets) {
+    for target in pools.candidates(behavior) {
         let is_current = running.contains(&Pick {
             behavior: index,
             target,
