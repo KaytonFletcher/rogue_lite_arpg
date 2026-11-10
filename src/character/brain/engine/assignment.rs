@@ -132,12 +132,19 @@ mod tests {
                 3.0,
                 &[],
             ),
+            Behavior::new(
+                Some(Motion::Swoop),
+                None,
+                CommitPolicy::UntilFinished { interrupt_tier: 2 },
+                0.5,
+                &[],
+            ),
         ],
     };
 
-    /// Everything but the dash may start.
+    /// Only wander and chase may start.
     fn available(behavior: &Behavior) -> bool {
-        behavior.motion != Some(Motion::Dash)
+        matches!(behavior.motion, Some(Motion::Wander | Motion::Chase))
     }
 
     fn read_distance(distance: f32) -> impl Fn(ConsiderationInput) -> Option<f32> {
@@ -173,12 +180,18 @@ mod tests {
     }
 
     #[test]
-    fn running_committed_behavior_blocks_its_slot() {
+    fn running_committed_behavior_yields_only_to_a_higher_tier() {
         let read = read_distance(50.0);
+        let all = |_: &Behavior| true;
         assert_eq!(
-            assign_behaviors_to_slots(&BRAIN, &read, &|_: &Behavior| true, &[2], |_| true),
+            assign_behaviors_to_slots(&BRAIN, &read, &all, &[2], |index| index != 3),
             Vec::<usize>::new(),
-            "a running committed dash keeps the motion slot from lower tiers"
+            "a running tier-1 dash keeps the motion slot from tiers 0 and 1"
+        );
+        assert_eq!(
+            assign_behaviors_to_slots(&BRAIN, &read, &all, &[2], |_| true),
+            vec![3],
+            "a tier-2 swoop takes the slot despite its lower score"
         );
     }
 }

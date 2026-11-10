@@ -253,6 +253,24 @@ mod tests {
     }
 
     #[test]
+    fn rising_threshold_holds_while_current() {
+        let mapping = ScoreMapping::Threshold {
+            enter: 100.0,
+            exit: 120.0,
+        };
+        assert_eq!(
+            mapping.score_raw_input(110.0, false),
+            Some(0.0),
+            "past enter"
+        );
+        assert_eq!(
+            mapping.score_raw_input(110.0, true),
+            Some(1.0),
+            "inside exit"
+        );
+    }
+
+    #[test]
     fn falling_threshold_passes_at_or_above() {
         // `exit < enter` passes raw inputs at or above the threshold.
         let mapping = ScoreMapping::Threshold {
