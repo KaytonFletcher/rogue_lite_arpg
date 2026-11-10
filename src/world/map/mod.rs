@@ -25,8 +25,8 @@
 //! - Build order: size, structures, fixed-anchor spawns, player start (kept the recipe's
 //!   `start_clearance` from enemies), exits, enemies, chests, NPCs (see `Stage`).
 //! - `MapBlueprint` is renderer-agnostic data (`TileGrid<TileKind>`, mark and haze grids,
-//!   placements). All backend detail (`TilemapBundle`, atlas slots) stays inside `spawn.rs`
-//!   and `tiling.rs`.
+//!   placements). All backend detail (`TilemapBundle`, atlas slots) stays inside `spawn.rs` and
+//!   `tiling.rs`.
 //! - Structures are glyph grids (: = transparent, letters = placements over floor); builtin
 //!   features (`EmptySquare`, `Pond`, ...) are picked by reserved kind name and share footprint
 //!   reservation. Portals sit one tile inside a solid wall border; no doorway is carved.
