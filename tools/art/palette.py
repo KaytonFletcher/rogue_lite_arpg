@@ -26,3 +26,19 @@ assert len(ALL) == 81, "style guide palette has 81 colours"
 def c(name, step):
     """Colour `step` of ramp `name`."""
     return PAL[name][step]
+
+
+def srgb_to_oklab(rgb):
+    """(..., 3) uint8 sRGB to (..., 3) float OKLab, for perceptual colour distance."""
+    import numpy as np
+
+    x = np.asarray(rgb, float) / 255.0
+    lin = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+    m1 = np.array([[0.4122214708, 0.5363325363, 0.0514459929],
+                   [0.2119034982, 0.6806995451, 0.1073969566],
+                   [0.0883024619, 0.2817188376, 0.6299787005]])
+    m2 = np.array([[0.2104542553, 0.7936177850, -0.0040720468],
+                   [1.9779984951, -2.4285922050, 0.4505937099],
+                   [0.0259040371, 0.7827717662, -0.8086757660]])
+    lms = np.cbrt(lin @ m1.T)
+    return lms @ m2.T
