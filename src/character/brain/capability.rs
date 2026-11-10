@@ -1,14 +1,16 @@
 //! What an entity can do: the per-motion-and-action table, the [`Capability`]
 //! components that carry motions and actions out, and the [`Capabilities`]
-//! cache of their profiles that decisions read.
+//! cache of their profiles and of equipped items' reach that decisions read.
 //!
 //! To add a capability: implement [`Capability`] for its component and register
 //! it in [`plugin`]. Nothing in the decision code changes.
 
 use bevy::prelude::*;
 
+use super::BrainSystems;
 use super::action::{Ability, Action, Bite, Breath, Heal};
 use super::motion::{Dash, Motion, Orbit, Swoop, Wander};
+use crate::prelude::*;
 
 /// A type with its own entry in a [`MotionActionTable`].
 pub trait MotionActionKey: Copy {
@@ -116,9 +118,10 @@ pub trait Capability: Component {
 
 /// The profile of each motion and action this entity can run, `None` for the
 /// ones it can't. Motions steered without a component and `Action::Idle` are
-/// always owned; the rest are filled from [`Capability`] components. Only their
-/// observers write it, so it is never removed on its own: a re-added table
-/// would forget the components already on the entity.
+/// always owned; the rest are filled from [`Capability`] components and, for
+/// `Action::Use`, from the item equipped in the slot. Only their observers and
+/// [`cache_equipment_profiles`] write it, so it is never removed on its own: a
+/// re-added table would forget the components already on the entity.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Capabilities(MotionActionTable<Option<CapabilityProfile>>);
 
@@ -156,6 +159,12 @@ impl Capabilities {
 }
 
 pub(super) fn plugin(app: &mut App) {
+    app.add_observer(clear_mainhand_profile)
+        .add_observer(clear_offhand_profile)
+        .add_systems(
+            Update,
+            cache_equipment_profiles.in_set(BrainSystems::Perception),
+        );
     register::<Wander>(app);
     register::<Orbit>(app);
     register::<Dash>(app);
@@ -185,6 +194,43 @@ fn cache_profile<C: Capability>(
 fn clear_profile<C: Capability>(removed: On<Remove<C>>, mut owners: Query<&mut Capabilities>) {
     if let Ok(mut capabilities) = owners.get_mut(removed.entity) {
         capabilities.set(C::KEY, None);
+    }
+}
+
+/// Caches the reach of each slot's item for holders whose equipment changed,
+/// and for new tables. An item's reach is read when it is equipped, so it must
+/// not change while equipped. A slot with no usable item reads `None`.
+fn cache_equipment_profiles(
+    mut holders: Query<
+        (Option<&Mainhand>, Option<&Offhand>, &mut Capabilities),
+        Or<(Changed<Mainhand>, Changed<Offhand>, Added<Capabilities>)>,
+    >,
+    items: Query<&Equippable, (With<Equipped>, With<ItemOf>)>,
+) {
+    for (mainhand, offhand, mut capabilities) in &mut holders {
+        for slot in EquipmentSlot::ALL {
+            let profile = slot
+                .equipped(mainhand, offhand)
+                .and_then(|item| items.get(item).ok())
+                .map(|equippable| CapabilityProfile {
+                    reach: equippable.reach,
+                    ..CapabilityProfile::default()
+                });
+            capabilities.set(Action::Use(slot), profile);
+        }
+    }
+}
+
+/// An emptied slot clears at once, so no decision reads a stale reach.
+fn clear_mainhand_profile(removed: On<Remove<Mainhand>>, mut owners: Query<&mut Capabilities>) {
+    if let Ok(mut capabilities) = owners.get_mut(removed.entity) {
+        capabilities.set(Action::Use(EquipmentSlot::Mainhand), None);
+    }
+}
+
+fn clear_offhand_profile(removed: On<Remove<Offhand>>, mut owners: Query<&mut Capabilities>) {
+    if let Ok(mut capabilities) = owners.get_mut(removed.entity) {
+        capabilities.set(Action::Use(EquipmentSlot::Offhand), None);
     }
 }
 

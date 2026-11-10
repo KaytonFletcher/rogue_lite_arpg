@@ -265,14 +265,6 @@ impl EquipmentRead<'_, '_> {
         slot.equipped(mainhand, offhand)
     }
 
-    pub fn equippable_in_slot(&self, holder: Entity, slot: EquipmentSlot) -> Option<&Equippable> {
-        let item = self.item_in_slot(holder, slot)?;
-        self.equipment
-            .get(item)
-            .ok()
-            .map(|usable| usable.equippable)
-    }
-
     /// Whether the holder could use the slot now, without consuming anything.
     pub fn can_use(&self, holder: Entity, slot: EquipmentSlot) -> Result<(), EquipmentUseFailure> {
         let (mainhand, offhand, mana) = self
