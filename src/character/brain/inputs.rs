@@ -288,7 +288,8 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
     }
 
     /// The profile of the capability that carries out `action`: the equipped
-    /// item's reach, or the ability component's. `Idle` needs none.
+    /// item's reach, or the ability's profile cached in [`Capabilities`]. `Idle`
+    /// needs none.
     pub fn action_profile(&self, action: Action) -> Option<CapabilityProfile> {
         match action {
             Action::Use(slot) => self

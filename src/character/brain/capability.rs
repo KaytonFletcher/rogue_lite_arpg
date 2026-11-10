@@ -116,8 +116,9 @@ pub trait Capability: Component {
 
 /// The profile of each motion and action this entity can run, `None` for the
 /// ones it can't. Motions steered without a component and `Action::Idle` are
-/// always owned; the rest are filled from [`Capability`] components and
-/// equipped items.
+/// always owned; the rest are filled from [`Capability`] components. Only their
+/// observers write it, so it is never removed on its own: a re-added table
+/// would forget the components already on the entity.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Capabilities(MotionActionTable<Option<CapabilityProfile>>);
 
