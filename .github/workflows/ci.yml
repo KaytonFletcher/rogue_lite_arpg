@@ -58,6 +58,21 @@ jobs:
       - name: Check import rules
         run: bash scripts/check_imports.sh
 
+  # Check generated art against the style guide's hard rules (palette, alpha, native scale).
+  art:
+    name: Art audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python packages
+        run: python3 -m pip install --user numpy pillow
+
+      - name: Audit art
+        run: python3 tools/art/audit.py assets/tilesets/tile_atlas.png tools/tileset/source_village.png
+
   # Check documentation.
   docs:
     name: Docs

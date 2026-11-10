@@ -25,7 +25,7 @@ import sys
 import numpy as np
 from PIL import Image
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "art"))
 from palette import ALL, c  # noqa: E402
 
 T = 32

@@ -21,7 +21,7 @@ import sys
 import numpy as np
 from PIL import Image, ImageDraw
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tileset"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "art"))
 from palette import ALL, PAL  # noqa: E402
 
 N = 64
