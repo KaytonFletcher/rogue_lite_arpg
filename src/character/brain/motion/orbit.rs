@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use rand::RngExt;
 
-use super::{SteerInput, SteeredCharacter, Steering};
+use super::{Running, SteerInput, SteeredCharacter, Steering};
 use crate::character::brain::{Interval, Motion};
 
 const ORBIT_REROLL_INTERVAL: Interval = Interval::new(1.5, 2.5);
@@ -80,11 +80,18 @@ impl Default for Orbit {
 /// Circles the target while the brain holds [`Motion::Orbit`].
 pub(super) fn apply_orbit(
     time: Res<Time<Virtual>>,
-    mut orbiters: Query<(SteeredCharacter, &mut Orbit, &mut Steering)>,
+    mut orbiters: Query<(
+        SteeredCharacter,
+        &mut Orbit,
+        &mut Steering,
+        Ref<Running<Orbit>>,
+    )>,
 ) {
-    for (character, mut orbit, mut steering) in &mut orbiters {
-        let Some(motion @ Motion::Orbit(distance_range)) = character.brain.motion() else {
+    for (character, mut orbit, mut steering, running) in &mut orbiters {
+        if running.is_added() {
             orbit.leave_orbit();
+        }
+        let Some(motion @ Motion::Orbit(distance_range)) = character.brain.motion() else {
             continue;
         };
         *steering = character

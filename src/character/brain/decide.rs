@@ -3,6 +3,7 @@
 //! [`Brain`] holds.
 
 use bevy::ecs::lifecycle::HookContext;
+use bevy::ecs::system::ParallelCommands;
 use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 use rand::RngExt;
@@ -14,11 +15,18 @@ use super::engine::{
     Behavior, BehaviorScoreExplanation, assign_behaviors_to_slots, explain_behavior,
 };
 use super::inputs::{ConsiderationInput, DecisionInputComponents, DecisionInputs, DecisionQueries};
-use super::motion::MotionFinished;
+use super::motion::{Motion, MotionFinished, mark_running_motion};
 use super::{Action, ActionFinished, ActionOutcome, Brain, Targeting};
 
-/// Seconds between a brain's scheduled decisions.
+/// Seconds between a brain's scheduled decisions while it is engaged or a
+/// hostile is near.
 const DECISION_PERIOD: f32 = 0.1;
+/// Seconds between decisions for a brain far from any hostile, which has
+/// nothing to react to quickly: its level of detail.
+const FAR_DECISION_PERIOD: f32 = 0.5;
+/// Distance to the watched hostile beyond which a brain is far. Well past every
+/// sight range, so a brain is back to full rate before it can spot anyone.
+const NEAR_DISTANCE: f32 = 1000.0;
 
 type DecidingBrains<'world, 'state> = Query<
     'world,
@@ -37,14 +45,51 @@ pub struct ScoreTrace {
     pub behavior_explanations: Vec<BehaviorScoreExplanation<Entity>>,
 }
 
+type PacedBrains<'world, 'state> = Query<
+    'world,
+    'state,
+    (
+        &'static mut Brain,
+        DecisionInputComponents,
+        Option<&'static mut ScoreTrace>,
+        &'static mut DecisionClock,
+    ),
+>;
+
+/// When a brain next decides on its own schedule. Kept apart from [`Brain`], so
+/// ticking it does not mark the brain changed.
+#[derive(Component, Debug, Default)]
+#[component(on_add = schedule_first_decision)]
+pub struct DecisionClock {
+    next_decision_at: f32,
+}
+
+impl DecisionClock {
+    /// Whether a decision is due at `now`. A due clock moves to its next
+    /// `period` boundary after `now`, keeping its phase without a burst of
+    /// catch-up decisions after a long frame.
+    fn tick(&mut self, now: f32, period: f32) -> bool {
+        if now < self.next_decision_at {
+            return false;
+        }
+        let periods_passed = ((now - self.next_decision_at) / period).floor() + 1.0;
+        self.next_decision_at += periods_passed * period;
+        // Rounding near an exact multiple can land the boundary on `now`.
+        if self.next_decision_at <= now {
+            self.next_decision_at += period;
+        }
+        true
+    }
+}
+
 /// Puts a new brain's first decision at a random point in the next period, so brains spawned
 /// together don't all decide on the same frame.
-pub(super) fn schedule_first_decision(mut world: DeferredWorld, context: HookContext) {
+fn schedule_first_decision(mut world: DeferredWorld, context: HookContext) {
     let now = world
         .get_resource::<Time<Virtual>>()
         .map_or(0.0, Time::elapsed_secs);
-    if let Some(mut brain) = world.get_mut::<Brain>(context.entity) {
-        brain.next_decision_at = now + rand::rng().random_range(0.0..DECISION_PERIOD);
+    if let Some(mut clock) = world.get_mut::<DecisionClock>(context.entity) {
+        clock.next_decision_at = now + rand::rng().random_range(0.0..DECISION_PERIOD);
     }
 }
 
@@ -55,7 +100,7 @@ pub(super) fn on_release_finished_motion(
     queries: DecisionQueries,
     mut brains: DecidingBrains,
     mut commands: Commands,
-    #[cfg(feature = "dev_tools")] mut decision_stats: ResMut<DecisionStats>,
+    #[cfg(feature = "dev_tools")] decision_stats: Res<DecisionStats>,
 ) {
     let Ok((mut brain, item, mut score_trace)) = brains.get_mut(finished.entity) else {
         return;
@@ -69,11 +114,13 @@ pub(super) fn on_release_finished_motion(
         .motion_profile(finished.motion)
         .map_or(0.0, |profile| profile.cooldown);
     brain.start_cooldown(finished.motion, inputs.now + cooldown);
+    let held_motion = brain.motion();
     if brain.finish_committed_behavior(finished.behavior_run_id) {
         #[cfg(feature = "tracy")]
         let _span = info_span!("decide::after_motion").entered();
         redecide_now(
             &mut brain,
+            held_motion,
             &inputs,
             &mut commands,
             score_trace.as_deref_mut(),
@@ -92,7 +139,7 @@ pub(super) fn on_finish_action(
     queries: DecisionQueries,
     mut brains: DecidingBrains,
     mut commands: Commands,
-    #[cfg(feature = "dev_tools")] mut decision_stats: ResMut<DecisionStats>,
+    #[cfg(feature = "dev_tools")] decision_stats: Res<DecisionStats>,
 ) {
     let Ok((mut brain, item, mut score_trace)) = brains.get_mut(finished.entity) else {
         return;
@@ -118,11 +165,13 @@ pub(super) fn on_finish_action(
         // action's finish.
         Action::Use(_) | Action::Idle => {}
     }
+    let held_motion = brain.motion();
     if brain.finish_committed_behavior(finished.behavior_run_id) {
         #[cfg(feature = "tracy")]
         let _span = info_span!("decide::after_action").entered();
         redecide_now(
             &mut brain,
+            held_motion,
             &inputs,
             &mut commands,
             score_trace.as_deref_mut(),
@@ -132,50 +181,59 @@ pub(super) fn on_finish_action(
     }
 }
 
-/// Decides for every due brain. Each moves to its next period boundary after
-/// now, keeping its phase without a burst of catch-up decisions after a long frame.
+/// Decides for every brain whose clock is due, in parallel. A brain far from
+/// any hostile decides at [`FAR_DECISION_PERIOD`] instead of [`DECISION_PERIOD`].
 pub(super) fn decide_behavior(
     time: Res<Time<Virtual>>,
     queries: DecisionQueries,
-    mut brains: DecidingBrains,
-    mut commands: Commands,
-    #[cfg(feature = "dev_tools")] mut decision_stats: ResMut<DecisionStats>,
+    mut brains: PacedBrains,
+    par_commands: ParallelCommands,
+    #[cfg(feature = "dev_tools")] decision_stats: Res<DecisionStats>,
 ) {
     let now = time.elapsed_secs();
-    for (mut brain, item, mut score_trace) in &mut brains {
-        if now < brain.next_decision_at {
-            continue;
-        }
-        let periods_passed = ((now - brain.next_decision_at) / DECISION_PERIOD).floor() + 1.0;
-        brain.next_decision_at += periods_passed * DECISION_PERIOD;
-        // Rounding near an exact multiple can land the boundary on `now`.
-        if brain.next_decision_at <= now {
-            brain.next_decision_at += DECISION_PERIOD;
-        }
-        #[cfg(feature = "tracy")]
-        let _span = info_span!("decide::paced").entered();
-        redecide_now(
-            &mut brain,
-            &DecisionInputs {
+    brains
+        .par_iter_mut()
+        .for_each(|(mut brain, item, mut score_trace, mut clock)| {
+            let inputs = DecisionInputs {
                 item: &item,
                 queries: &queries,
                 now,
-            },
-            &mut commands,
-            score_trace.as_deref_mut(),
-        );
-        #[cfg(feature = "dev_tools")]
-        decision_stats.record_paced_decision();
-    }
+            };
+            let period = if inputs.is_engaged_or_within(NEAR_DISTANCE) {
+                DECISION_PERIOD
+            } else {
+                FAR_DECISION_PERIOD
+            };
+            if !clock.tick(now, period) {
+                return;
+            }
+            #[cfg(feature = "tracy")]
+            let _span = info_span!("decide::paced").entered();
+            par_commands.command_scope(|mut commands| {
+                let held_motion = brain.motion();
+                redecide_now(
+                    &mut brain,
+                    held_motion,
+                    &inputs,
+                    &mut commands,
+                    score_trace.as_deref_mut(),
+                );
+            });
+            #[cfg(feature = "dev_tools")]
+            decision_stats.record_paced_decision();
+        });
 }
 
 /// Drops committed behaviors that lost their target, were stunned or timed
 /// out, then fills the slots, each behavior against the best target in its
 /// pool. A winning finite motion rolls its start chance; a miss waits out its
 /// cooldown and the next best behavior takes the slot. A winner against a
-/// hostile other than the focus makes it the new focus.
+/// hostile other than the focus makes it the new focus. `held_motion` is the
+/// motion its [`Running`](super::motion::Running) marker shows, read before a
+/// finish cleared it.
 fn redecide_now(
     brain: &mut Brain,
+    held_motion: Option<Motion>,
     inputs: &DecisionInputs,
     commands: &mut Commands,
     score_trace: Option<&mut ScoreTrace>,
@@ -220,9 +278,11 @@ fn redecide_now(
     #[cfg(feature = "tracy")]
     let _span = info_span!("decide::commit").entered();
     brain.commit_decision(&winners, &missed_start_cooldowns, inputs);
+    let mut entity = commands.entity(inputs.entity());
+    mark_running_motion(&mut entity, held_motion, brain.motion());
     let target = winners.iter().find_map(|winner| winner.target);
     if let Some(target) = target.filter(|&target| pools.focus != Some(target)) {
-        commands.entity(inputs.entity()).insert(Targeting(target));
+        entity.insert(Targeting(target));
     }
 }
 
@@ -242,4 +302,24 @@ fn passes_start_roll(
     }
     missed_start_cooldowns[motion] = Some(inputs.now + capability_profile.cooldown);
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clock_keeps_its_phase_without_catching_up() {
+        let mut clock = DecisionClock {
+            next_decision_at: 1.05,
+        };
+        assert!(!clock.tick(1.0, 0.1), "not due before its time");
+        assert!(clock.tick(1.37, 0.1), "due once late");
+        assert!(
+            (clock.next_decision_at - 1.45).abs() < 1e-5,
+            "the next boundary after now on the old phase, got {}",
+            clock.next_decision_at
+        );
+        assert!(!clock.tick(1.40, 0.1), "one late frame is one decision");
+    }
 }

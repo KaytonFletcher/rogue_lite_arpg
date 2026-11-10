@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use rand::RngExt;
 
 use super::{
-    CurrentBehaviorRunId, MotionStep, SteerInput, SteeredCharacter, Steering,
+    CurrentBehaviorRunId, MotionStep, Running, SteerInput, SteeredCharacter, Steering,
     report_motion_finished,
 };
 use crate::character::brain::{CapabilityProfile, Interval, Motion};
@@ -133,7 +133,7 @@ impl Dash {
 pub(super) fn apply_dash(
     time: Res<Time<Virtual>>,
     mut commands: Commands,
-    mut dashers: Query<(Entity, SteeredCharacter, &mut Dash, &mut Steering)>,
+    mut dashers: Query<(Entity, SteeredCharacter, &mut Dash, &mut Steering), With<Running<Dash>>>,
 ) {
     for (entity, character, mut dash, mut steering) in &mut dashers {
         if dash

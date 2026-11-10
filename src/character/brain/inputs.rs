@@ -228,6 +228,15 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         self.item.entity
     }
 
+    /// Whether the brain has a focus or the hostile it tracks is within `distance`.
+    pub fn is_engaged_or_within(&self, distance: f32) -> bool {
+        self.item.targeting.is_some()
+            || self
+                .item
+                .target_info
+                .is_some_and(|info| info.distance <= distance)
+    }
+
     pub fn stunned(&self) -> bool {
         self.item.kinematics.is_some_and(Kinematics::is_stunned)
     }

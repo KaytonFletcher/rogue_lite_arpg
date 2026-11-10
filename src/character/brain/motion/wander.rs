@@ -5,7 +5,7 @@ use std::f32::consts::TAU;
 use bevy::prelude::*;
 use rand::RngExt;
 
-use super::{SteerInput, SteeredCharacter, Steering};
+use super::{Running, SteerInput, SteeredCharacter, Steering};
 use crate::character::brain::{Interval, Motion};
 
 const WANDER_SPEED_SCALE: f32 = 0.4;
@@ -57,11 +57,18 @@ impl Wander {
 /// Ambles inside the home area while the brain holds [`Motion::Wander`].
 pub(super) fn apply_wander(
     time: Res<Time<Virtual>>,
-    mut wanderers: Query<(SteeredCharacter, &mut Wander, &mut Steering)>,
+    mut wanderers: Query<(
+        SteeredCharacter,
+        &mut Wander,
+        &mut Steering,
+        Ref<Running<Wander>>,
+    )>,
 ) {
-    for (character, mut wander, mut steering) in &mut wanderers {
-        if character.brain.motion() != Some(Motion::Wander) {
+    for (character, mut wander, mut steering, running) in &mut wanderers {
+        if running.is_added() {
             wander.leave_wander();
+        }
+        if character.brain.motion() != Some(Motion::Wander) {
             continue;
         }
         *steering =

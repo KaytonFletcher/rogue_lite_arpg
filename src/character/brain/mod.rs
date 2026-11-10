@@ -43,8 +43,8 @@ use self::action::StartedEquipmentUses;
 pub use self::action::{Ability, Action, ActionFinished, ActionOutcome, Bite, Breath, Heal};
 pub use self::capability::CapabilityProfile;
 use self::capability::{MotionActionKey, MotionActionTable};
+use self::decide::DecisionClock;
 pub use self::decide::ScoreTrace;
-use self::decide::schedule_first_decision;
 pub(crate) use self::engine::{Behavior, CommitPolicy, Consideration, Curve};
 pub use self::engine::{BrainDefinition, Interval, Targets};
 use self::engine::{Pick, validate_brain};
@@ -63,19 +63,18 @@ use crate::prelude::*;
 
 /// A character's utility brain: its static definition, the behaviors running
 /// in its motion and action slots, and its cooldowns. Only [`decide`] writes it,
-/// at 10 Hz on a random per-brain phase; motion and action systems read it
-/// and answer with [`MotionFinished`](motion::MotionFinished) or
-/// [`ActionFinished`].
+/// when its [`DecisionClock`] is due or a committed behavior finishes, so
+/// `Changed<Brain>` means a decision or a cooldown changed something. Motion and
+/// action systems read it and answer with
+/// [`MotionFinished`](motion::MotionFinished) or [`ActionFinished`].
 #[derive(Component, Debug)]
-#[require(StartedEquipmentUses, Steering)]
-#[component(on_add = schedule_first_decision)]
+#[require(StartedEquipmentUses, Steering, DecisionClock)]
 pub struct Brain {
     definition: &'static BrainDefinition,
     running_behaviors: Vec<RunningBehavior>,
     next_behavior_run_id: u32,
     ready_at: MotionActionTable<f32>,
     attack_finish_pending: bool,
-    next_decision_at: f32,
 }
 
 impl Brain {
@@ -87,7 +86,6 @@ impl Brain {
             next_behavior_run_id: 0,
             ready_at: MotionActionTable::default(),
             attack_finish_pending: false,
-            next_decision_at: 0.0,
         }
     }
 
