@@ -177,20 +177,29 @@ pub(super) fn mark_running_motion(
     if previous.map(Motion::index) == current.map(Motion::index) {
         return;
     }
-    match previous {
-        Some(Motion::Wander) => entity.remove::<Running<Wander>>(),
-        Some(Motion::Orbit(_)) => entity.remove::<Running<Orbit>>(),
-        Some(Motion::Dash) => entity.remove::<Running<Dash>>(),
-        Some(Motion::Swoop) => entity.remove::<Running<Swoop>>(),
-        _ => entity,
-    };
+    if previous.is_some() {
+        entity.remove::<(
+            Running<Wander>,
+            Running<Orbit>,
+            Running<Dash>,
+            Running<Swoop>,
+        )>();
+    }
     match current {
-        Some(Motion::Wander) => entity.insert(Running::<Wander>::default()),
-        Some(Motion::Orbit(_)) => entity.insert(Running::<Orbit>::default()),
-        Some(Motion::Dash) => entity.insert(Running::<Dash>::default()),
-        Some(Motion::Swoop) => entity.insert(Running::<Swoop>::default()),
-        _ => entity,
-    };
+        Some(Motion::Wander) => {
+            entity.insert(Running::<Wander>::default());
+        }
+        Some(Motion::Orbit(_)) => {
+            entity.insert(Running::<Orbit>::default());
+        }
+        Some(Motion::Dash) => {
+            entity.insert(Running::<Dash>::default());
+        }
+        Some(Motion::Swoop) => {
+            entity.insert(Running::<Swoop>::default());
+        }
+        _ => {}
+    }
 }
 
 pub(super) fn plugin(app: &mut App) {

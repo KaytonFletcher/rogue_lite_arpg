@@ -18,13 +18,12 @@ use super::inputs::{ConsiderationInput, DecisionInputComponents, DecisionInputs,
 use super::motion::{Motion, MotionFinished, mark_running_motion};
 use super::{Action, ActionFinished, ActionOutcome, Brain, Targeting};
 
-/// Seconds between a brain's scheduled decisions while it is engaged or a
-/// hostile is near.
+/// Seconds between a brain's scheduled decisions.
 const DECISION_PERIOD: f32 = 0.1;
-/// Seconds between decisions for a brain far from any hostile, which has
-/// nothing to react to quickly: its level of detail.
-const FAR_DECISION_PERIOD: f32 = 0.5;
-/// Distance to the watched hostile beyond which a brain is far. Well past every
+/// A brain far from any hostile, with nothing to react to quickly, decides on
+/// one in this many scheduled ticks: its level of detail.
+const FAR_TICKS_PER_DECISION: u8 = 5;
+/// Distance to the tracked hostile beyond which a brain is far. Well past every
 /// sight range, so a brain is back to full rate before it can spot anyone.
 const NEAR_DISTANCE: f32 = 1000.0;
 
@@ -35,6 +34,7 @@ type DecidingBrains<'world, 'state> = Query<
         &'static mut Brain,
         DecisionInputComponents,
         Option<&'static mut ScoreTrace>,
+        &'static mut DecisionClock,
     ),
 >;
 
@@ -45,51 +45,52 @@ pub struct ScoreTrace {
     pub behavior_explanations: Vec<BehaviorScoreExplanation<Entity>>,
 }
 
-type PacedBrains<'world, 'state> = Query<
-    'world,
-    'state,
-    (
-        &'static mut Brain,
-        DecisionInputComponents,
-        Option<&'static mut ScoreTrace>,
-        &'static mut DecisionClock,
-    ),
->;
-
-/// When a brain next decides on its own schedule. Kept apart from [`Brain`], so
-/// ticking it does not mark the brain changed.
+/// When a brain next decides on its own schedule, kept apart from the
+/// decisions it records in [`Brain`].
 #[derive(Component, Debug, Default)]
 #[component(on_add = schedule_first_decision)]
 pub struct DecisionClock {
-    next_decision_at: f32,
+    next_tick_at: f32,
+    /// Counts a far brain's ticks; it decides when this wraps to zero.
+    far_ticks: u8,
 }
 
 impl DecisionClock {
-    /// Whether a decision is due at `now`. A due clock moves to its next
-    /// `period` boundary after `now`, keeping its phase without a burst of
-    /// catch-up decisions after a long frame.
-    fn tick(&mut self, now: f32, period: f32) -> bool {
-        if now < self.next_decision_at {
+    /// Whether a decision is due at `now`. The clock ticks every
+    /// [`DECISION_PERIOD`], keeping its phase without a burst of catch-up ticks
+    /// after a long frame, and a `far` brain decides on one tick in
+    /// [`FAR_TICKS_PER_DECISION`]. A brain that comes near decides on its next
+    /// tick.
+    fn tick(&mut self, now: f32, far: bool) -> bool {
+        if now < self.next_tick_at {
             return false;
         }
-        let periods_passed = ((now - self.next_decision_at) / period).floor() + 1.0;
-        self.next_decision_at += periods_passed * period;
+        let periods_passed = ((now - self.next_tick_at) / DECISION_PERIOD).floor() + 1.0;
+        self.next_tick_at += periods_passed * DECISION_PERIOD;
         // Rounding near an exact multiple can land the boundary on `now`.
-        if self.next_decision_at <= now {
-            self.next_decision_at += period;
+        if self.next_tick_at <= now {
+            self.next_tick_at += DECISION_PERIOD;
         }
-        true
+        if !far {
+            self.far_ticks = 0;
+            return true;
+        }
+        self.far_ticks = (self.far_ticks + 1) % FAR_TICKS_PER_DECISION;
+        self.far_ticks == 0
     }
 }
 
-/// Puts a new brain's first decision at a random point in the next period, so brains spawned
-/// together don't all decide on the same frame.
+/// Puts a new brain's first tick at a random point in the next period, and its
+/// far decisions on a random tick, so brains spawned together don't all decide
+/// on the same frame.
 fn schedule_first_decision(mut world: DeferredWorld, context: HookContext) {
     let now = world
         .get_resource::<Time<Virtual>>()
         .map_or(0.0, Time::elapsed_secs);
     if let Some(mut clock) = world.get_mut::<DecisionClock>(context.entity) {
-        clock.next_decision_at = now + rand::rng().random_range(0.0..DECISION_PERIOD);
+        let mut rng = rand::rng();
+        clock.next_tick_at = now + rng.random_range(0.0..DECISION_PERIOD);
+        clock.far_ticks = rng.random_range(0..FAR_TICKS_PER_DECISION);
     }
 }
 
@@ -102,7 +103,7 @@ pub(super) fn on_release_finished_motion(
     mut commands: Commands,
     #[cfg(feature = "dev_tools")] decision_stats: Res<DecisionStats>,
 ) {
-    let Ok((mut brain, item, mut score_trace)) = brains.get_mut(finished.entity) else {
+    let Ok((mut brain, item, mut score_trace, _)) = brains.get_mut(finished.entity) else {
         return;
     };
     let inputs = DecisionInputs {
@@ -141,7 +142,7 @@ pub(super) fn on_finish_action(
     mut commands: Commands,
     #[cfg(feature = "dev_tools")] decision_stats: Res<DecisionStats>,
 ) {
-    let Ok((mut brain, item, mut score_trace)) = brains.get_mut(finished.entity) else {
+    let Ok((mut brain, item, mut score_trace, _)) = brains.get_mut(finished.entity) else {
         return;
     };
     let inputs = DecisionInputs {
@@ -181,12 +182,11 @@ pub(super) fn on_finish_action(
     }
 }
 
-/// Decides for every brain whose clock is due, in parallel. A brain far from
-/// any hostile decides at [`FAR_DECISION_PERIOD`] instead of [`DECISION_PERIOD`].
+/// Decides for every brain whose clock is due, in parallel.
 pub(super) fn decide_behavior(
     time: Res<Time<Virtual>>,
     queries: DecisionQueries,
-    mut brains: PacedBrains,
+    mut brains: DecidingBrains,
     par_commands: ParallelCommands,
     #[cfg(feature = "dev_tools")] decision_stats: Res<DecisionStats>,
 ) {
@@ -199,12 +199,7 @@ pub(super) fn decide_behavior(
                 queries: &queries,
                 now,
             };
-            let period = if inputs.is_engaged_or_within(NEAR_DISTANCE) {
-                DECISION_PERIOD
-            } else {
-                FAR_DECISION_PERIOD
-            };
-            if !clock.tick(now, period) {
+            if !clock.tick(now, !inputs.is_engaged_or_within(NEAR_DISTANCE)) {
                 return;
             }
             #[cfg(feature = "tracy")]
@@ -238,9 +233,9 @@ fn redecide_now(
     commands: &mut Commands,
     score_trace: Option<&mut ScoreTrace>,
 ) {
-    let (has_target, stunned) = (inputs.target().is_some(), inputs.stunned());
+    let (focus, stunned) = (inputs.focus(), inputs.stunned());
     for running in brain.running_behaviors.clone() {
-        if running.should_drop_committed_behavior(has_target, stunned, inputs.now) {
+        if running.should_drop_committed_behavior(focus, stunned, inputs.now) {
             brain.drop_committed_behavior(running, inputs);
         }
     }
@@ -248,7 +243,7 @@ fn redecide_now(
     let memory = brain.memory();
     let definition = brain.definition();
     let running = brain.running_picks();
-    let hostiles = inputs.hostiles();
+    let hostiles = inputs.hostiles(definition.scores_hostiles());
     let pools = inputs.pools(&hostiles);
     let read = |input: ConsiderationInput, target: Option<Entity>| {
         inputs.read(input, hostiles.facts(target), memory)
@@ -309,18 +304,41 @@ fn passes_start_roll(
 mod tests {
     use super::*;
 
+    fn clock_at(next_tick_at: f32) -> DecisionClock {
+        DecisionClock {
+            next_tick_at,
+            far_ticks: 0,
+        }
+    }
+
     #[test]
     fn clock_keeps_its_phase_without_catching_up() {
-        let mut clock = DecisionClock {
-            next_decision_at: 1.05,
-        };
-        assert!(!clock.tick(1.0, 0.1), "not due before its time");
-        assert!(clock.tick(1.37, 0.1), "due once late");
+        let mut clock = clock_at(1.05);
+        assert!(!clock.tick(1.0, false), "not due before its time");
+        assert!(clock.tick(1.37, false), "due once late");
         assert!(
-            (clock.next_decision_at - 1.45).abs() < 1e-5,
+            (clock.next_tick_at - 1.45).abs() < 1e-5,
             "the next boundary after now on the old phase, got {}",
-            clock.next_decision_at
+            clock.next_tick_at
         );
-        assert!(!clock.tick(1.40, 0.1), "one late frame is one decision");
+        assert!(!clock.tick(1.40, false), "one late frame is one decision");
+    }
+
+    #[test]
+    fn clock_never_lands_on_now() {
+        let mut clock = clock_at(1.0);
+        assert!(clock.tick(1.0, false), "due exactly on time");
+        assert!(clock.next_tick_at > 1.0, "the next tick is after now");
+    }
+
+    #[test]
+    fn far_brain_decides_on_one_tick_in_five_and_comes_back_at_once() {
+        let mut clock = clock_at(0.0);
+        // Halfway between boundaries, so each frame is exactly one tick.
+        let decisions = (0_u8..10)
+            .filter(|&tick| clock.tick(f32::from(tick) * DECISION_PERIOD + 0.05, true))
+            .count();
+        assert_eq!(decisions, 2, "ten far ticks make two decisions");
+        assert!(clock.tick(1.05, false), "the first near tick decides");
     }
 }

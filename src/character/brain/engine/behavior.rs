@@ -92,6 +92,16 @@ pub struct BrainDefinition {
     pub behaviors: &'static [Behavior],
 }
 
+impl BrainDefinition {
+    /// Whether any behavior scores more hostiles than the focus, so a decision
+    /// needs to gather them.
+    pub fn scores_hostiles(&self) -> bool {
+        self.behaviors
+            .iter()
+            .any(|behavior| behavior.targets == Targets::Hostiles && behavior.reads_target())
+    }
+}
+
 /// Rejects brains that compile but cannot behave. Intervals and thresholds
 /// are checked by their constructors at compile time.
 pub fn validate_brain(brain: &BrainDefinition) -> Result<(), String> {

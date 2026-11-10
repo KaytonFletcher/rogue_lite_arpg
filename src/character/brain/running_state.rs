@@ -54,13 +54,16 @@ impl RunningBehavior {
         })
     }
 
-    /// Whether a committed behavior lost its target, was stunned, or timed out.
+    /// Whether a committed behavior lost its target or it is no longer the
+    /// `focus`, was stunned, or timed out.
     pub(super) fn should_drop_committed_behavior(
         &self,
-        has_target: bool,
+        focus: Option<Entity>,
         stunned: bool,
         now: f32,
     ) -> bool {
-        self.committed && (!has_target || stunned || now - self.started_at > COMMIT_TIMEOUT)
+        let target_lost =
+            focus.is_none() || self.target.is_some_and(|target| Some(target) != focus);
+        self.committed && (target_lost || stunned || now - self.started_at > COMMIT_TIMEOUT)
     }
 }

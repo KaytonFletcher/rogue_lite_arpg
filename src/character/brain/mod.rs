@@ -63,8 +63,7 @@ use crate::prelude::*;
 
 /// A character's utility brain: its static definition, the behaviors running
 /// in its motion and action slots, and its cooldowns. Only [`decide`] writes it,
-/// when its [`DecisionClock`] is due or a committed behavior finishes, so
-/// `Changed<Brain>` means a decision or a cooldown changed something. Motion and
+/// when its [`DecisionClock`] is due or a committed behavior finishes. Motion and
 /// action systems read it and answer with
 /// [`MotionFinished`](motion::MotionFinished) or [`ActionFinished`].
 #[derive(Component, Debug)]

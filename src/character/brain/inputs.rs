@@ -13,7 +13,7 @@ use super::action::{Ability, Action, Bite, Breath, Heal, find_carried_potion};
 use super::capability::CapabilityProfile;
 use super::engine::{Behavior, MAX_TARGETS, TargetPools};
 use super::motion::{Dash, HomeArea, Motion, Orbit, Swoop, Wander};
-use super::perception::{TargetLock, Targeting};
+use super::perception::{SIGHT_GRACE, TargetLock, Targeting};
 use crate::prelude::*;
 
 /// The raw fact a consideration reads; see [`DecisionInputs::read`].
@@ -169,9 +169,10 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
     }
 
     /// The targets this brain may pick while it has a focus: the focus first,
-    /// then other living characters of the opposing side its sight ray reaches.
-    /// Only the focus while an aggro [`TargetLock`] holds it.
-    pub fn hostiles(&self) -> Hostiles {
+    /// then, when `gather_others` (a behavior scores hostiles), other living
+    /// characters of the opposing side its sight ray reaches. Only the focus
+    /// while an aggro [`TargetLock`] holds it.
+    pub fn hostiles(&self, gather_others: bool) -> Hostiles {
         let unknown = TargetFacts {
             distance: f32::INFINITY,
             line_of_sight: false,
@@ -185,22 +186,35 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
         let (Some(focus), Some(info)) = (self.focus(), self.target()) else {
             return hostiles;
         };
+        let seconds_since_targeted = self.now - info.targeted_at;
+        let ray_caster = self.item.ray_caster;
+        // A focus switched to moments ago has no line of sight until the turned
+        // sight ray reports, so cast for it rather than let an older target win.
+        let line_of_sight = match ray_caster {
+            Some(ray_caster) if seconds_since_targeted < SIGHT_GRACE => {
+                self.sight_ray_reaches(ray_caster, focus, info.position)
+            }
+            _ => info.line_of_sight,
+        };
         hostiles.push(
             focus,
             TargetFacts {
                 distance: info.distance,
-                line_of_sight: info.line_of_sight,
-                seconds_since_targeted: self.now - info.targeted_at,
+                line_of_sight,
+                seconds_since_targeted,
             },
         );
-        let (Some(side), Some(ray_caster)) = (self.item.side, self.item.ray_caster) else {
+        let (Some(side), Some(ray_caster)) = (self.item.side, ray_caster) else {
             return hostiles;
         };
-        if self.item.locked {
+        if !gather_others || self.item.locked {
             return hostiles;
         }
         let position = self.item.transform.translation.xy();
         for (entity, transform, other_side) in &self.queries.characters {
+            if hostiles.len == MAX_TARGETS {
+                break;
+            }
             let target_position = transform.translation.xy();
             let distance = target_position.distance(position);
             if entity != focus
@@ -351,7 +365,7 @@ impl DecisionInputs<'_, '_, '_, '_, '_> {
     pub fn read(
         &self,
         input: ConsiderationInput,
-        target: Option<&TargetFacts>,
+        target: Option<TargetFacts>,
         memory: BrainMemory,
     ) -> Option<f32> {
         match input {

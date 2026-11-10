@@ -135,11 +135,10 @@ pub(super) fn momentum_multiplier(is_current: bool) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::brain::considerations::{distance_threshold, flag};
+    use crate::character::brain::considerations::{HAS_TARGET, distance_threshold};
     use crate::character::brain::{Ability, Action, CommitPolicy, Consideration, Motion, Targets};
 
     const NEAR: Consideration = distance_threshold("near", 100.0, 120.0);
-    const HAS_TARGET: Consideration = flag("has target", ConsiderationInput::HasTarget);
 
     static BRAIN: BrainDefinition = BrainDefinition {
         behaviors: &[
@@ -430,6 +429,45 @@ mod tests {
                 },
             ],
             "the chase fixes target 1, so the bite may not take the nearer target 2"
+        );
+    }
+
+    #[test]
+    fn running_committed_target_holds_the_decision() {
+        static SEEDED: BrainDefinition = BrainDefinition {
+            behaviors: &[
+                Behavior::new(
+                    Some(Motion::Dash),
+                    None,
+                    CommitPolicy::UntilFinished { interrupt_tier: 1 },
+                    3.0,
+                    &[HAS_TARGET],
+                ),
+                Behavior::new(
+                    None,
+                    Some(Action::Ability(Ability::Bite)),
+                    CommitPolicy::ContinuouslyScored,
+                    2.0,
+                    &[NEAR],
+                )
+                .with_targets(Targets::Hostiles),
+            ],
+        };
+        let pools = TargetPools {
+            focus: Some(2),
+            hostiles: &[2, 3],
+        };
+        let running = [Pick {
+            behavior: 0,
+            target: Some(3),
+        }];
+        assert_eq!(
+            assign_behaviors_to_slots(&SEEDED, &pools, &read_per_target, &all, &running, |_| true),
+            vec![Pick {
+                behavior: 1,
+                target: Some(3),
+            }],
+            "the running dash against 3 holds the bite to 3, though the focus 2 comes first"
         );
     }
 }

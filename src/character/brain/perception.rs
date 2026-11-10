@@ -43,7 +43,7 @@ impl Default for VisionCone {
 
 /// Seconds a newly targeted entity is kept without line of sight while the
 /// sight ray turns to it.
-const SIGHT_GRACE: f32 = 0.2;
+pub(super) const SIGHT_GRACE: f32 = 0.2;
 
 /// The entity this one fights, added on sight, when damaged, or when the brain
 /// picks another hostile.
