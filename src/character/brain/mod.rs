@@ -1,6 +1,6 @@
 //! ECS glue for the pure utility brains. Data flows one way, one writer each:
-//! 1. [`perception`] tracks targets, and its `DecisionInputs` answers each consideration's input
-//!    straight from the world when scoring asks.
+//! 1. [`perception`] tracks targets, and [`inputs`]' `DecisionInputs` answers each consideration's
+//!    input straight from the world when scoring asks.
 //! 2. [`decide`] runs the pure [`engine`] scoring and writes which behavior holds each slot on the
 //!    [`Brain`]. Each behavior scores every target in its [`Targets`] pool; a winner against a
 //!    hostile other than the focus makes it the new [`Targeting`] focus.
