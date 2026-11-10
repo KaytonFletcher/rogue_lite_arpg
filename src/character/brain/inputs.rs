@@ -135,12 +135,12 @@ impl Hostiles {
     }
 
     /// The facts about `target`; `None` for no target or one not gathered.
-    pub fn facts(&self, target: Option<Entity>) -> Option<&TargetFacts> {
+    pub fn facts(&self, target: Option<Entity>) -> Option<TargetFacts> {
         let index = self
             .as_slice()
             .iter()
             .position(|&entity| Some(entity) == target)?;
-        Some(&self.facts[index])
+        Some(self.facts[index])
     }
 }
 
