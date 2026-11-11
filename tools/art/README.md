@@ -36,16 +36,20 @@ CI runs `audit.py` on the generated atlas, so off-palette or soft-edged pixels c
 
 ## PixelLab from Claude
 
-PixelLab runs a hosted MCP server. With a subscription, add it to Claude Code:
+PixelLab is connected as an MCP server in Claude (Tier 1 account). The full recipe, the
+character ids, the commands that rebuild each sheet, and the cloud-session workarounds
+(no upload or download URLs from the sandbox: push inputs to the `art/pixellab-inputs`
+branch and use raw GitHub URLs; read results inline with `pixelart_workbench join`) are in
+the project doc `art/art_direction_state.md`. The rules are in `art/style_guide_mvp.md`.
 
-```sh
-claude mcp add --transport http pixellab https://api.pixellab.ai/mcp \
-  --header "Authorization: Bearer YOUR_PIXELLAB_TOKEN"
-```
+| Script | What it does |
+|---|---|
+| `recompose.py` | Swaps refined props into a scene: finds each old prop by its ramp+step pattern and draws the new one with the same per-pixel lighting offset. |
+| `refined/`, `scenes/` | PixelLab-refined props (cleaned) and the two recomposed 640x360 scenes. |
+| `../sprites/lpc_sheet.py` | PixelLab animation strips (`../sprites/pixellab/<name>/`) to the 13x21 LPC sheet `AnimationSheet::default()` reads, cleaned onto the palette. |
+| `../sprites/sheet_preview.py` | A GIF of every state of an LPC sheet in four directions. |
+| `../tileset/decor/` | The 64 decor sprites (PixelLab, cleaned) placed by the decor layer. |
 
-or, in Claude on the web or the app, add it as a custom connector with that URL and header.
-Useful tools for this game: create a character with 4 or 8 directions, animate a character,
-create a state of an existing character, and top-down tilesets (for fill textures only, see
-step 5). PixelLab's API also edits existing art (edit from text or a reference image,
-inpaint with a mask, edit an animation), so a sprite sheet can be adjusted, not only
-regenerated.
+Generated PNGs under `tools/art`, `tools/tileset`, `tools/sprites`, the tile atlas and the
+three character sheets are kept out of Git LFS (`.gitattributes`), because cloud sessions
+can't upload LFS objects. Add an exemption before committing a generated PNG elsewhere.
