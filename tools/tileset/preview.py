@@ -53,7 +53,8 @@ HAZE = [
 
 H, W = len(TERRAIN), len(TERRAIN[0])
 RANK = {"~": 0, ".": 1, "#": 1, "w": 1, "_": 1, ",": 2, "c": 3}
-LAYERS = [(1, 16), (2, 48), (3, 80)]  # (rank, first transition index)
+LAYERS = [(1, 16, 288), (2, 48, 304), (3, 80, 320)]  # (rank, transitions, variant B)
+DECOR = {",": 336, ".": 368}  # first decor slot for grass and ground cells
 
 
 def cell(grid, x, y):
@@ -72,12 +73,38 @@ def corner_mask(test, i, j):
     return (test(i - 1, j) | test(i, j) << 1 | test(i - 1, j - 1) << 2 | test(i, j - 1) << 3)
 
 
-def dual_index(first, mask, i, j, salt):
+def dual_index(first, mask, i, j, salt, alt=None):
     if mask == 0:
         return None
     if mask == 15:
         return first + COLS + variant(i, j, salt)
+    if alt is not None and variant(i, j, salt + 32, 2):
+        return alt + mask
     return first + mask
+
+
+def patch(x, y, salt):
+    """Smooth value noise on a 4-cell lattice, 0..1: where decor clusters."""
+    gx, gy = x / 4, y / 4
+    x0, y0 = int(np.floor(gx)), int(np.floor(gy))
+    fx, fy = gx - x0, gy - y0
+    fx, fy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
+    v = lambda a, b: variant(a, b, salt, 1000) / 999
+    top = v(x0, y0) * (1 - fx) + v(x0 + 1, y0) * fx
+    bottom = v(x0, y0 + 1) * (1 - fx) + v(x0 + 1, y0 + 1) * fx
+    return top * (1 - fy) + bottom * fy
+
+
+def decor_index(x, y):
+    kind = cell(TERRAIN, x, y)
+    if kind not in DECOR:
+        return None
+    if any(cell(TERRAIN, x + dx, y + dy) != kind for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+        return None
+    density = min(max((patch(x, y, 61) - 0.4) * 2.5, 0.0), 1.0) * 0.7
+    if variant(x, y, 62, 1000) / 1000 >= density:
+        return None
+    return DECOR[kind] + variant(x, y, 63, 32)
 
 
 def blit(img, index, px, py):
@@ -97,13 +124,18 @@ def dual_px(i, j):
 for j in range(H + 1):
     for i in range(W + 1):
         blit(img, variant(i, j, 0), *dual_px(i, j))
-for rank, first in LAYERS:
+for rank, first, alt in LAYERS:
     for j in range(H + 1):
         for i in range(W + 1):
             mask = corner_mask(lambda x, y: int(RANK[cell(TERRAIN, x, y)] >= rank), i, j)
-            index = dual_index(first, mask, i, j, rank)
+            index = dual_index(first, mask, i, j, rank, alt)
             if index is not None:
                 blit(img, index, *dual_px(i, j))
+for y in range(H):
+    for x in range(W):
+        index = decor_index(x, y)
+        if index is not None:
+            blit(img, index, x * T + T // 2, (H - 1 - y) * T + T // 2)
 for glyph, first in (("f", 160), ("s", 192)):
     for j in range(H + 1):
         for i in range(W + 1):

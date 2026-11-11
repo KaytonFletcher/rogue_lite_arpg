@@ -10,6 +10,11 @@
 //! Walls, wood floors and dead zones stay on the cell grid, drawn above the terrain. Ground
 //! marks (fissures, scorch) and haze are more dual-grid layers over their own cell masks.
 //!
+//! Each terrain has two sets of transition pieces that share their tile borders, so a long
+//! edge alternates between them without seams. A sparse decor layer (tufts, pebbles, twigs)
+//! sits on the cell grid inside open grass and ground, clustered into patches by smooth value
+//! noise rather than sprinkled evenly.
+//!
 //! `tools/tileset/build_atlas.py` builds the atlas these offsets point into, and
 //! `tools/tileset/preview.py` renders a test map with the same rules. Pure grid math with no
 //! backend detail; spawning stays in `spawn.rs`.
@@ -44,6 +49,20 @@ const WALL_FACE_STRAIGHTS: [u32; 3] = [14, 15, 16];
 const HAZE_FIRST: u32 = 224;
 /// Animation frames per haze piece.
 pub(crate) const HAZE_FRAMES: u32 = 4;
+/// First grass decor sprite; [`DECOR_VARIANTS`] of them follow.
+const GRASS_DECOR: u32 = 336;
+/// First ground decor sprite.
+const GROUND_DECOR: u32 = 368;
+/// Decor sprites per terrain.
+const DECOR_VARIANTS: u16 = 32;
+/// Decor patch lattice spacing, in cells: patches are a few cells across.
+const PATCH_CELLS: i32 = 4;
+/// Patch noise below this leaves the ground bare; above it decor thickens.
+const PATCH_THRESHOLD: f32 = 0.4;
+/// How fast decor thickens past the threshold.
+const PATCH_RAMP: f32 = 2.5;
+/// Chance of decor in the thickest part of a patch.
+const PATCH_MAX_DENSITY: f32 = 0.7;
 /// Corner mask with all four cells covered: a fill tile rather than a transition piece.
 const FULL: u8 = 15;
 
@@ -51,6 +70,11 @@ const FULL: u8 = 15;
 const WATER_SALT: u32 = 0;
 const WOOD_SALT: u32 = 7;
 const WALL_SALT: u32 = 8;
+/// Added to a layer's salt when rolling transition set A or B.
+const ALT_SALT: u32 = 32;
+const PATCH_SALT: u32 = 61;
+const DECOR_ROLL_SALT: u32 = 62;
+const DECOR_PICK_SALT: u32 = 63;
 
 /// The four cells around a dual-grid corner and their mask bits. The dual tile at `corner`
 /// covers cells `corner - (1, 1)` through `corner`; `+y` is north.
@@ -88,6 +112,15 @@ impl TerrainLayer {
             Self::Ground => 16,
             Self::Grass => 48,
             Self::Cobblestone => 80,
+        }
+    }
+
+    /// First atlas slot of the layer's second transition set (same borders, new middles).
+    fn alt_first(self) -> u32 {
+        match self {
+            Self::Ground => 288,
+            Self::Grass => 304,
+            Self::Cobblestone => 320,
         }
     }
 
@@ -137,14 +170,28 @@ fn corner_mask<T: Copy>(grid: &TileGrid<T>, corner: IVec2, covers: impl Fn(T) ->
 }
 
 /// Picks the piece for a corner mask: nothing when no corner is covered, a seeded fill
-/// variant when all four are, and the matching transition piece otherwise.
-fn dual_piece(first: u32, mask: u8, seed: u64, salt: u32, corner: IVec2) -> Option<u32> {
+/// variant when all four are, and the matching transition piece otherwise. With `alt_first`,
+/// transitions roll between the two sets.
+fn dual_piece(
+    first: u32,
+    alt_first: Option<u32>,
+    mask: u8,
+    seed: u64,
+    salt: u32,
+    corner: IVec2,
+) -> Option<u32> {
     match mask {
         0 => None,
         FULL => {
             Some(first + ATLAS_COLUMNS + u32::from(tile_variant(seed, salt, corner, FILL_VARIANTS)))
         }
-        _ => Some(first + u32::from(mask)),
+        _ => {
+            let set = match alt_first {
+                Some(alt) if tile_variant(seed, salt + ALT_SALT, corner, 2) == 1 => alt,
+                _ => first,
+            };
+            Some(set + u32::from(mask))
+        }
     }
 }
 
@@ -164,7 +211,14 @@ pub(crate) fn terrain_piece(
     corner: IVec2,
 ) -> Option<u32> {
     let mask = corner_mask(tiles, corner, |kind| terrain_rank(kind) >= layer.rank());
-    dual_piece(layer.first(), mask, seed, u32::from(layer.rank()), corner)
+    dual_piece(
+        layer.first(),
+        Some(layer.alt_first()),
+        mask,
+        seed,
+        u32::from(layer.rank()),
+        corner,
+    )
 }
 
 /// Piece for one ground mark at a dual-grid corner, or `None` where it draws nothing.
@@ -175,13 +229,64 @@ pub(crate) fn mark_piece(
     corner: IVec2,
 ) -> Option<u32> {
     let covered = corner_mask(marks, corner, |cell| cell == Some(mark));
-    dual_piece(mark_first(mark), covered, seed, 16 + mark as u32, corner)
+    dual_piece(
+        mark_first(mark),
+        None,
+        covered,
+        seed,
+        16 + mark as u32,
+        corner,
+    )
 }
 
 /// First animation frame of the haze piece at a dual-grid corner, or `None` without haze.
 pub(crate) fn haze_piece(haze: &TileGrid<bool>, corner: IVec2) -> Option<u32> {
     let mask = corner_mask(haze, corner, |hazy| hazy);
     (mask != 0).then(|| HAZE_FIRST + u32::from(mask) * HAZE_FRAMES)
+}
+
+/// Decor sprite for a cell, or `None` for bare ground. Only cells of open grass or ground
+/// (all four neighbours the same kind) can hold decor, so it never sits on a transition edge.
+/// Smooth patch noise decides how thick decor is around the cell, then a per-cell roll
+/// decides whether this one gets a sprite.
+pub(crate) fn decor_piece(tiles: &TileGrid<TileKind>, seed: u64, tile: IVec2) -> Option<u32> {
+    let kind = tiles.get(tile)?;
+    let first = match kind {
+        TileKind::Grass => GRASS_DECOR,
+        TileKind::Ground => GROUND_DECOR,
+        _ => return None,
+    };
+    let open = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y]
+        .into_iter()
+        .all(|offset| tiles.get(tile + offset) == Some(kind));
+    if !open {
+        return None;
+    }
+    let density = ((patch_noise(seed, tile) - PATCH_THRESHOLD) * PATCH_RAMP).clamp(0.0, 1.0)
+        * PATCH_MAX_DENSITY;
+    let roll = f32::from(tile_variant(seed, DECOR_ROLL_SALT, tile, 1000)) / 1000.0;
+    (roll < density)
+        .then(|| first + u32::from(tile_variant(seed, DECOR_PICK_SALT, tile, DECOR_VARIANTS)))
+}
+
+/// Smooth value noise in `0..=1` on a [`PATCH_CELLS`] lattice: neighbouring cells read
+/// nearly the same value, so decor gathers in patches with bare ground between them.
+fn patch_noise(seed: u64, tile: IVec2) -> f32 {
+    let lattice = IVec2::new(
+        tile.x.div_euclid(PATCH_CELLS),
+        tile.y.div_euclid(PATCH_CELLS),
+    );
+    let smooth = |offset: i32| {
+        let t = offset as f32 / PATCH_CELLS as f32;
+        t * t * (3.0 - 2.0 * t)
+    };
+    let fx = smooth(tile.x.rem_euclid(PATCH_CELLS));
+    let fy = smooth(tile.y.rem_euclid(PATCH_CELLS));
+    let value =
+        |offset: IVec2| f32::from(tile_variant(seed, PATCH_SALT, lattice + offset, 1000)) / 999.0;
+    let south = value(IVec2::ZERO) * (1.0 - fx) + value(IVec2::X) * fx;
+    let north = value(IVec2::Y) * (1.0 - fx) + value(IVec2::ONE) * fx;
+    south * (1.0 - fy) + north * fy
 }
 
 /// Cell-grid piece drawn above the terrain: walls, wood floors and the dead-zone void.
@@ -277,6 +382,82 @@ mod tests {
         tiles
     }
 
+    /// The corner mask a grass transition piece draws, from either transition set.
+    fn grass_mask(piece: u32) -> u32 {
+        let first = TerrainLayer::Grass.first();
+        let alt = TerrainLayer::Grass.alt_first();
+        if (alt..alt + 16).contains(&piece) {
+            piece - alt
+        } else {
+            assert!(
+                (first..first + 16).contains(&piece),
+                "{piece} is not a grass transition piece"
+            );
+            piece - first
+        }
+    }
+
+    #[test]
+    fn transitions_use_both_sets() {
+        // A long straight grass edge: corners along it should not all pick the same set.
+        let tiles = grid(&[",,,,,,,,,,,,,,,,", "................"]);
+        let alt = TerrainLayer::Grass.alt_first();
+        let from_alt = (1..16)
+            .filter_map(|x| terrain_piece(&tiles, 9, TerrainLayer::Grass, IVec2::new(x, 1)))
+            .filter(|&piece| piece >= alt)
+            .count();
+        assert!(
+            (1..15).contains(&from_alt),
+            "a long edge mixes both transition sets, {from_alt} of 15 from set B"
+        );
+    }
+
+    #[test]
+    fn decor_stays_in_open_ground_and_grass() {
+        let size = UVec2::new(48, 48);
+        let mut tiles = TileGrid::new(size, TileKind::Grass);
+        for x in 0..48 {
+            tiles.set(IVec2::new(x, 24), TileKind::Water);
+        }
+        let mut placed = 0;
+        for x in 0..48 {
+            for y in 0..48 {
+                let tile = IVec2::new(x, y);
+                if let Some(piece) = decor_piece(&tiles, 5, tile) {
+                    placed += 1;
+                    assert!(
+                        (GRASS_DECOR..GRASS_DECOR + u32::from(DECOR_VARIANTS)).contains(&piece),
+                        "grass cells take grass decor, got {piece}"
+                    );
+                    assert!(
+                        (y - 24).abs() > 1,
+                        "decor never sits next to the water edge at {tile}"
+                    );
+                }
+            }
+        }
+        assert!(placed > 0, "a large open field gets some decor");
+        assert!(placed < 48 * 48 / 3, "decor stays sparse, placed {placed}");
+    }
+
+    #[test]
+    fn patch_noise_is_smooth_and_bounded() {
+        for x in -8..8 {
+            for y in -8..8 {
+                let here = patch_noise(7, IVec2::new(x, y));
+                let next = patch_noise(7, IVec2::new(x + 1, y));
+                assert!(
+                    (0.0..=1.0).contains(&here),
+                    "patch noise {here} is out of range"
+                );
+                assert!(
+                    (here - next).abs() < 0.5,
+                    "neighbouring cells read close values, {here} vs {next}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn corner_mask_bits_follow_compass_corners() {
         // Grass only in the north-west cell of a 2x2 map: the middle corner sees bit0.
@@ -291,15 +472,15 @@ mod tests {
     #[test]
     fn single_cell_gets_four_rounded_corner_pieces() {
         let tiles = grid(&["...", ".,.", "..."]);
-        let mut pieces: Vec<_> = (0..4)
+        let mut masks: Vec<_> = (0..4)
             .flat_map(|y| (0..4).map(move |x| IVec2::new(x, y)))
             .filter_map(|corner| terrain_piece(&tiles, 0, TerrainLayer::Grass, corner))
+            .map(grass_mask)
             .collect();
-        let first = TerrainLayer::Grass.first();
-        let expected = [first + 1, first + 2, first + 4, first + 8];
-        pieces.sort_unstable();
+        masks.sort_unstable();
         assert_eq!(
-            pieces, expected,
+            masks,
+            [1, 2, 4, 8],
             "a lone cell is drawn by its four corner pieces"
         );
     }
@@ -308,10 +489,11 @@ mod tests {
     fn inside_corner_uses_three_corner_piece() {
         // An L of grass: the corner inside the L sees three grass cells.
         let tiles = grid(&[",,", ",."]);
-        let piece = terrain_piece(&tiles, 0, TerrainLayer::Grass, IVec2::new(1, 1));
+        let piece = terrain_piece(&tiles, 0, TerrainLayer::Grass, IVec2::new(1, 1))
+            .expect("three grass cells draw a transition");
         assert_eq!(
-            piece,
-            Some(TerrainLayer::Grass.first() + 7),
+            grass_mask(piece),
+            7,
             "north-west, north-east and south-west are grass"
         );
     }
@@ -332,11 +514,13 @@ mod tests {
     fn grass_also_draws_ground_under_it() {
         // Grass ranks above ground, so the ground layer covers grass cells too and rims water.
         let tiles = grid(&["~,"]);
-        let ground = terrain_piece(&tiles, 0, TerrainLayer::Ground, IVec2::new(1, 1));
-        assert_eq!(
-            ground,
-            Some(TerrainLayer::Ground.first() + 2 + 8),
-            "the east cells (grass) are ground or higher"
+        let ground = terrain_piece(&tiles, 0, TerrainLayer::Ground, IVec2::new(1, 1))
+            .expect("the east cells draw ground");
+        let first = TerrainLayer::Ground.first();
+        let alt = TerrainLayer::Ground.alt_first();
+        assert!(
+            ground == first + 2 + 8 || ground == alt + 2 + 8,
+            "the east cells (grass) are ground or higher, got {ground}"
         );
         assert!(
             water_piece(&tiles, 0, IVec2::new(1, 1)).is_some(),

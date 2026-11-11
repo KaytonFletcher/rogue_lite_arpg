@@ -14,6 +14,14 @@ Layout (32px tiles, 16 columns; `src/world/map/tiling.rs` mirrors these offsets)
     row 10  fissure transitions    row 11  fissure fills
     row 12  scorch transitions     row 13  scorch fills
     rows 14-17  haze: 16 masks x 4 animation frames, index = 224 + mask * 4 + frame
+    row 18  ground transitions, variant B   row 19  grass B   row 20  cobble B
+    rows 21-22  grass decor (32)            rows 23-24  ground decor (32), cell grid
+
+Fills are calm: a low-frequency ramp band pattern with dither only on band edges. Fill
+variants 0-3 are plain, 4-5 carry a soft light patch, 6-7 a dark patch and clumps. Variant-B transitions share their
+tile borders with variant A (they differ only inside the window), so either can sit next
+to either. Decor sprites come from PixelLab (`tools/tileset/decor/`, cleaned with
+`tools/art/clean.py`) and sit on their own sparse layer.
 
 A transition tile paints only its upper terrain; the rest is transparent, so a lower layer
 shows through. Every edge is cut from one tileable noise field, so two tiles that share a
@@ -30,7 +38,7 @@ from palette import ALL, c  # noqa: E402
 
 T = 32
 COLS = 16
-ROWS = 18
+ROWS = 25
 HERE = os.path.dirname(__file__)
 SOURCE = os.path.join(HERE, "source_village.png")
 OUT = os.path.join(HERE, "..", "..", "assets", "tilesets", "tile_atlas.png")
@@ -111,12 +119,18 @@ def ground_over_water(g, fill):
 
 
 def grass_over_ground(g, fill):
-    """Ragged grass fringe: dark root line on the grass, a soft shadow on the dirt."""
+    """A mixed band rather than a line: dirt shows through near the grass lip, small tufts
+    spill out onto the dirt, and the lip itself is a dithered half-step, not an outline."""
     out = np.zeros((T, T, 4), np.uint8)
-    grass = g > 0.5
+    holes = (g > 0.5) & (g < 0.6) & (HOLES > 0.2)
+    grass = (g > 0.5) & ~holes
     out[grass] = fill[grass]
-    paint(out, grass & (g < 0.52), c("reed", 2))
-    paint(out, (g <= 0.5) & (g > 0.48), c("earth", 3))
+    paint(out, grass & (g < 0.53) & (BAYER < 0.5), c("reed", 1))
+    tufts = (g > 0.38) & (g <= 0.5) & (TUFTS > 0.2)
+    paint(out, (g <= 0.5) & (g > 0.48) & ~tufts, c("earth", 3))
+    paint(out, holes & (g < 0.53), c("earth", 3))
+    paint(out, tufts, c("reed", 2))
+    paint(out, tufts & (TUFTS > 0.3), c("reed", 3))
     return out
 
 
@@ -174,10 +188,48 @@ def haze(g, frame):
     return out
 
 
+# --- calm fills ------------------------------------------------------------------------------
+
+def calm_fill(ramp, base, dark, light, seed, variant):
+    """A near-flat fill. The border ring is pure `base`, so variants and transitions meet
+    without seams and no tile-sized pattern can form. Inside, each variant gets a few short
+    dashes; variants 4-5 add one soft light patch, 6-7 a dark patch and a couple of lit clumps.
+    Only the patch rims are dithered."""
+    rng = np.random.default_rng(seed * 31 + variant)
+    out = np.zeros((T, T, 4), np.uint8)
+    out[...] = (*c(ramp, base), 255)
+    inner = WINDOW > 0.99
+    if variant >= 4:
+        cy, cx = rng.integers(12, T - 12, size=2)
+        r = rng.uniform(4.5, 6.5)
+        d = np.hypot((YY - cy) * 1.3, XX - cx) / r
+        step = light if variant < 6 else dark
+        paint(out, inner & ((d < 0.75) | ((d < 1.05) & (BAYER > (d - 0.75) / 0.3))), c(ramp, step))
+    for _ in range(rng.integers(3, 6)):
+        y, x = rng.integers(9, T - 10, size=2)
+        out[y, x:x + 2] = (*c(ramp, dark), 255)
+        out[y - 1, x + 2] = (*c(ramp, light), 255)
+    if variant >= 6:
+        for _ in range(2):
+            y, x = rng.integers(9, T - 11, size=2)
+            for dy, dx, f in CLUMP:
+                out[y + dy, x + dx] = (*c(ramp, f(base)), 255)
+    return out
+
+
+# A small lit clump: two light pixels over a dark base, NW-lit like everything else.
+CLUMP = [(0, 1, lambda b: b + 2), (1, 0, lambda b: b + 1), (1, 1, lambda b: b + 1),
+         (1, 2, lambda b: b - 1), (2, 1, lambda b: b - 1)]
+
+
+def fill_variants(ramp, base, dark, light, seed):
+    return [calm_fill(ramp, base, dark, light, seed, v) for v in range(8)]
+
+
 # --- assemble ---------------------------------------------------------------------------------
 
 BANK = edge_noise(11)
-FRINGE = edge_noise(23, coarse=0.5, mid=0.35, fine=0.3)
+FRINGE = edge_noise(23, coarse=0.6, mid=0.3, fine=0.08)
 SETTS = edge_noise(37, coarse=0.4, mid=0.3, fine=0.15)
 CRACK = edge_noise(41, coarse=0.7, mid=0.4, fine=0.2)
 BURN = edge_noise(53, coarse=0.6, mid=0.4, fine=0.3)
@@ -185,6 +237,8 @@ HAZE_NOISE = edge_noise(67, coarse=0.8, mid=0.3, fine=0.0)
 FOAM = edge_noise(71, coarse=0.0, mid=0.4, fine=0.6)
 CLODS = edge_noise(83, coarse=0.0, mid=0.5, fine=0.5)
 GLINT = edge_noise(97, coarse=0.0, mid=0.2, fine=0.8)
+HOLES = edge_noise(103, coarse=0.0, mid=0.6, fine=0.4)
+TUFTS = edge_noise(109, coarse=0.0, mid=0.4, fine=0.6)
 
 atlas = np.zeros((ROWS * T, COLS * T, 4), np.uint8)
 
@@ -194,10 +248,15 @@ def put(index, tile):
     atlas[row * T:(row + 1) * T, col * T:(col + 1) * T] = tile
 
 
-def dual_layer(first, painter, noise, amplitude, fill_variant=None, variant_seed=0):
-    """Writes 16 transitions at `first` and 8 fills on the next row."""
+def dual_layer(first, painter, noise, amplitude, fill_variant=None, variant_seed=0, alt_first=None):
+    """Writes 16 transitions at `first` and 8 fills on the next row. With `alt_first`, a
+    second set of transitions that keeps the tile borders and reshapes only the middle."""
     for mask in range(1, 16):
         put(first + mask, painter(field(mask, noise, amplitude)))
+    if alt_first is not None:
+        alt = noise * (1 - WINDOW) + edge_noise(variant_seed + 500) * WINDOW
+        for mask in range(1, 16):
+            put(alt_first + mask, painter(field(mask, alt, amplitude)))
     for variant in range(8):
         if fill_variant is not None:
             put(first + COLS + variant, fill_variant(variant))
@@ -211,15 +270,17 @@ def dual_layer(first, painter, noise, amplitude, fill_variant=None, variant_seed
 for v in range(8):
     put(v, source_tile(60 + v))
 
-ground_fill = source_tile(0)
-grass_fill = source_tile(20)
+GROUND_FILLS = fill_variants("earth", 4, 3, 5, seed=301)
+GRASS_FILLS = fill_variants("reed", 2, 1, 3, seed=401)
+ground_fill = GROUND_FILLS[0]
+grass_fill = GRASS_FILLS[0]
 cobble_fill = source_tile(40)
 dual_layer(16, lambda g: ground_over_water(g, ground_fill), BANK, 0.55,
-           fill_variant=lambda v: source_tile(0 + v))
+           fill_variant=lambda v: GROUND_FILLS[v], variant_seed=3000, alt_first=288)
 dual_layer(48, lambda g: grass_over_ground(g, grass_fill), FRINGE, 0.6,
-           fill_variant=lambda v: source_tile(20 + v))
+           fill_variant=lambda v: GRASS_FILLS[v], variant_seed=4000, alt_first=304)
 dual_layer(80, lambda g: cobble_over_any(g, cobble_fill), SETTS, 0.45,
-           fill_variant=lambda v: cobble_fill)
+           fill_variant=lambda v: cobble_fill, variant_seed=5000, alt_first=320)
 for v in range(8):
     put(112 + v, source_tile(80 + v))
 put(127, np.full((T, T, 4), (*c("ash", 0), 255), np.uint8))
@@ -230,6 +291,11 @@ dual_layer(192, scorch, BURN, 0.6, variant_seed=2000)
 for mask in range(1, 16):
     for frame in range(4):
         put(224 + mask * 4 + frame, haze(field(mask, edge_noise(5), 0.3), frame))
+
+DECOR = os.path.join(HERE, "decor")
+for kind, first in (("grass", 336), ("ground", 368)):
+    for v in range(32):
+        put(first + v, np.array(Image.open(os.path.join(DECOR, f"{kind}_{v:02d}.png")).convert("RGBA")))
 
 # --- checks -----------------------------------------------------------------------------------
 

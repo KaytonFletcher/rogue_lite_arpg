@@ -7,8 +7,8 @@ use bevy_ecs_tilemap::prelude::*;
 use super::blueprint::{MapBlueprint, PlacementKind};
 use super::tiles::{GroundMark, TileGrid, TileKind, TileRect};
 use super::tiling::{
-    HAZE_FRAMES, TerrainLayer, cell_piece, dual_size, haze_piece, mark_piece, terrain_piece,
-    water_piece,
+    HAZE_FRAMES, TerrainLayer, cell_piece, decor_piece, dual_size, haze_piece, mark_piece,
+    terrain_piece, water_piece,
 };
 use crate::prelude::*;
 
@@ -79,6 +79,9 @@ fn spawn_tiles(
             terrain_piece(terrain, seed, layer, corner)
         });
     }
+    layers.spawn("Decor Layer", map_size, 0.45, None, |tile| {
+        decor_piece(terrain, seed, tile)
+    });
     for (index, mark) in GroundMark::ALL.into_iter().enumerate() {
         let z = 0.5 + 0.05 * index as f32;
         layers.spawn("Mark Layer", dual_size, z, None, |corner| {
