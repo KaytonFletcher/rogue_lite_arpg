@@ -9,7 +9,7 @@ them (an 18px label header, then one row per direction in the order south, east,
     rot.png      the four rotations, one row (join ... --as sheet --columns 4)
     walk.png     8 frames per direction            -> rows 8-11, the rotation + 8 frames
                  (skeleton-v3 walks keep the weapon; template walks tend to drop it)
-    idle.png     4 frames per direction            -> rows 12-15, frames 0-2
+    idle.png     4+ frames per direction           -> rows 12-15, --idle-frames (default 0,1,2)
     attack.png   9 frames (reference + 8)          -> rows 16-19
     death.png    7 frames, south only              -> row 20, 5 of them
     tend.png     7 frames (optional)               -> rows 0-3 (the spellcast slot)
@@ -90,6 +90,11 @@ def main():
     parser.add_argument("out")
     parser.add_argument("--ramps", required=True)
     parser.add_argument("--death-frames", default="0,2,4,5,6")
+    parser.add_argument("--cap", action="append", default=[], metavar="RAMP=STEP",
+                        help="after cleaning, pull steps above STEP on RAMP down to STEP-1 "
+                             "(e.g. blight=3 keeps the brightest blight for small seams)")
+    parser.add_argument("--idle-frames", default="0,1,2",
+                        help="which idle frames fill the 3 LPC idle columns")
     args = parser.parse_args()
     src = lambda name: os.path.join(args.dir, name)
 
@@ -115,7 +120,8 @@ def main():
 
     place("tend.png", 0, lambda n: range(n))
     place("walk.png", 8, lambda n: range(n), lead_with_rotation=True)
-    place("idle.png", 12, lambda n: range(min(3, n)))
+    idle = [int(i) for i in args.idle_frames.split(",")]
+    place("idle.png", 12, lambda n: [i for i in idle if i < n])
     place("attack.png", 16, lambda n: range(n))
     death = fit(strip(src("death.png"), 1)[0], rotations["south"])
     for column, index in enumerate(int(i) for i in args.death_frames.split(",")):
@@ -127,6 +133,17 @@ def main():
     subprocess.run([sys.executable, clean, raw, args.out, "--scale", "1", "--background", "none",
                     "--ramps", args.ramps], check=True)
     os.remove(raw)
+    if args.cap:
+        sys.path.insert(0, os.path.join(HERE, "..", "art"))
+        from palette import PAL
+
+        out = np.array(Image.open(args.out).convert("RGBA"))
+        for cap in args.cap:
+            ramp, step = cap.split("=")
+            for high in range(int(step) + 1, len(PAL[ramp])):
+                hit = (out[..., :3] == PAL[ramp][high]).all(-1) & (out[..., 3] > 0)
+                out[hit, :3] = PAL[ramp][int(step) - 1]
+        Image.fromarray(out).save(args.out)
 
 
 if __name__ == "__main__":
