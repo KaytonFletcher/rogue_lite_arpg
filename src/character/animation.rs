@@ -48,7 +48,9 @@ impl Default for AnimationSheet {
             columns: 13,
             animations: [
                 state_rows([14, 15, 12, 13], 3, 0.5),
-                state_rows([10, 11, 8, 9], 9, 0.1),
+                // Column 0 of a walk row is the standing pose; the loop is columns 1-8.
+                // Including it puts a stand-still hitch in every stride.
+                state_rows_from([10, 11, 8, 9], 1, 8, 0.1),
                 state_rows([18, 19, 16, 17], 9, 0.1),
                 state_rows([20, 20, 20, 20], 5, 0.4),
             ],
@@ -82,8 +84,18 @@ impl AnimationSheet {
 }
 
 fn state_rows(rows: [usize; 4], frame_count: usize, frame_duration: f32) -> [AnimationData; 4] {
+    state_rows_from(rows, 0, frame_count, frame_duration)
+}
+
+fn state_rows_from(
+    rows: [usize; 4],
+    first_column: usize,
+    frame_count: usize,
+    frame_duration: f32,
+) -> [AnimationData; 4] {
     rows.map(|row| AnimationData {
         row,
+        first_column,
         frame_count,
         frame_duration,
     })
@@ -118,13 +130,14 @@ fn update_animation_state(
             continue;
         }
 
-        facing_direction.set_if_neq(facing_direction.turned_toward(kinematics.direction));
-
-        // Attacking animation takes priority over walking / idle
+        // Attacking animation takes priority over walking / idle. Facing stays locked for the
+        // swing: a facing change re-selects the animation and would restart it mid-swing.
         if **attacking {
             animation_state.set_if_neq(CharacterAnimationState::Attacking);
             continue;
         }
+
+        facing_direction.set_if_neq(facing_direction.turned_toward(kinematics.direction));
 
         if kinematics.is_moving() {
             animation_state.set_if_neq(CharacterAnimationState::Moving);
@@ -149,7 +162,7 @@ fn cycle_character_animation(
 ) {
     for (mut indices, mut timer, mut sprite, state, direction, sheet) in &mut query {
         let animation = sheet.get(*state, *direction);
-        let first = animation.row * sheet.columns;
+        let first = animation.row * sheet.columns + animation.first_column;
         let last = first + animation.frame_count - 1;
 
         // Row-major atlas: carry the frame column across a row change so a
@@ -176,6 +189,14 @@ fn cycle_character_animation(
 
         if let Some(atlas) = &mut sprite.texture_atlas {
             atlas.index = first + offset;
+        }
+
+        // Dying plays once and holds its last frame; looping it would flash the
+        // character back to standing just as the despawn / game-over timer ends.
+        // `animate_sprites` drops the timer once the one-shot runs out.
+        if *state == CharacterAnimationState::Dying {
+            *indices = AnimationIndices::OneShot(first + 1..=last);
+            continue;
         }
 
         // `Cycle::next` yields the range start first, so leave the iterator one

@@ -2,7 +2,7 @@
 
 python3 tools/sprites/sheet_preview.py SHEET.png OUT.gif [--scale 3]
 
-States follow `AnimationSheet::default()`: idle (rows 12-15, 3 frames), walk (8-11, 9), attack
+States follow `AnimationSheet::default()`: idle (rows 12-15, 3 frames), walk (8-11, columns 1-8), attack
 (16-19, 9), tend (0-3, 7) and dying (row 20, 5). Rows run up, left, down, right; the preview
 shows them down, right, up, left like the game's direction order.
 """
@@ -11,7 +11,8 @@ import argparse
 from PIL import Image, ImageDraw
 
 CELL = 64
-STATES = [("idle", 12, 3), ("walk", 8, 9), ("attack", 16, 9), ("tend", 0, 7), ("dying", 20, 5)]
+STATES = [("idle", 12, 3), ("walk", 8, 8), ("attack", 16, 9), ("tend", 0, 7), ("dying", 20, 5)]
+FIRST_COLUMN = {"walk": 1}  # column 0 of a walk row is the standing pose
 SHOW = [2, 3, 0, 1]  # down, right, up, left as offsets from the state's first row
 BACKGROUND = (92, 84, 78, 255)
 
@@ -35,7 +36,7 @@ def main():
                 sheet_row = first if name == "dying" else first + offset
                 if name == "dying" and column:
                     continue
-                frame = tick % count
+                frame = FIRST_COLUMN.get(name, 0) + tick % count
                 cell = sheet.crop((frame * CELL, sheet_row * CELL,
                                    (frame + 1) * CELL, (sheet_row + 1) * CELL))
                 canvas.alpha_composite(cell, (column * CELL, y + 10))
