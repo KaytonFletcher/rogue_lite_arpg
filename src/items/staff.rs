@@ -106,9 +106,10 @@ pub fn ice_staff(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) ->
 /// What every staff shares: a mainhand item drawn with `image` that swings and casts its
 /// projectiles every `cooldown` seconds.
 fn staff(image: Handle<Image>, cooldown: f32) -> impl Scene {
+    let family = WeaponFamily::Staff;
     bsn! {
         Staff { source_offset: Vec2::new(0.0, 26.0) }
-        WeaponFamily::Staff
+        family
         ~Equippable::new(EquipmentSlot::Mainhand, cooldown, &STAFF_EQUIPMENT_POSES)
             .with_reach(STAFF_REACH)
         Sprite { image }
