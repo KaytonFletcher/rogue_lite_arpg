@@ -96,8 +96,14 @@ pub struct SpriteAssets {
     pub grounded_ice: Handle<Image>,
     #[asset(path = "vfx/tome_of_healing_effect.png")]
     pub tome_of_healing_effect: Handle<Image>,
-    #[asset(path = "player/player_sprite_sheet.png")]
-    pub player_sprite_sheet: Handle<Image>,
+    #[asset(path = "player/knight_unarmed.png")]
+    pub knight_unarmed_sprite_sheet: Handle<Image>,
+    #[asset(path = "player/knight_sword.png")]
+    pub knight_sword_sprite_sheet: Handle<Image>,
+    #[asset(path = "player/knight_axe.png")]
+    pub knight_axe_sprite_sheet: Handle<Image>,
+    #[asset(path = "player/knight_staff.png")]
+    pub knight_staff_sprite_sheet: Handle<Image>,
     #[asset(path = "enemies/ice_mage_enemy.png")]
     pub ice_mage_enemy_sprite_sheet: Handle<Image>,
     #[asset(path = "enemies/warrior_enemy.png")]

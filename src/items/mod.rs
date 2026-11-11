@@ -29,7 +29,7 @@ pub mod prelude {
         STAFF_REACH, fire_staff, ice_staff, mage_fire_staff_fan, mage_fire_staff_single_bolt,
     };
     pub use super::tome::tome_of_healing;
-    pub use super::{Item, ItemKind};
+    pub use super::{Item, ItemKind, WeaponFamily};
 }
 
 pub(super) fn plugin(app: &mut App) {
@@ -67,6 +67,29 @@ impl Item {
             value,
             kind,
             drop_rate: 1.2,
+        }
+    }
+}
+
+/// Which of a character's weapon animations a mainhand item uses. Characters whose sheets draw
+/// the weapon in hand pick the matching sheet; every holder times its attack animation to it.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WeaponFamily {
+    /// One-handed slash.
+    Sword,
+    /// Overhead chop.
+    Axe,
+    /// Forward cast.
+    Staff,
+}
+
+impl WeaponFamily {
+    /// How long one use of a weapon in this family lasts, in seconds. The weapon's own timers
+    /// and the attack animation both read this, so the swing on screen matches the hitbox.
+    pub const fn attack_seconds(self) -> f32 {
+        match self {
+            Self::Sword | Self::Staff => 0.4,
+            Self::Axe => 0.5,
         }
     }
 }

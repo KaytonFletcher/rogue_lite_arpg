@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use super::{
     Experience, enemy_children, enemy_wander, ground_sight_ray, spawn_enemy_with_equipment,
 };
+use crate::character::WeaponSheets;
 use crate::character::brain::considerations::{
     ATTACK_FINISHED, HAS_TARGET, IN_MAINHAND_REACH, MAINHAND, NO_TARGET, RETURN_TO_HOME, WANDER,
     consideration, flag, reach_fraction_threshold, target_within_distance,
@@ -177,6 +178,13 @@ pub(super) fn spawn_warrior(
 }
 
 fn warrior(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl Scene {
+    // The warrior's sheet draws his sword, so the sword item's own sprite stays hidden.
+    let sheets = WeaponSheets {
+        unarmed: sprites.warrior_enemy_sprite_sheet.clone(),
+        sword: Some(sprites.warrior_enemy_sprite_sheet.clone()),
+        axe: None,
+        staff: None,
+    };
     let sprite = Sprite::from_atlas_image(
         sprites.warrior_enemy_sprite_sheet.clone(),
         TextureAtlas {
@@ -195,6 +203,7 @@ fn warrior(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) -> impl 
         ~Heal::new(HEAL_COOLDOWN)
         enemy_wander()
         template(move |_| Ok(sprite.clone()))
+        template(move |_| Ok(sheets.clone()))
         Items [
             @health_potion(sprites)
         ]

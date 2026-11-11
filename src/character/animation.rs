@@ -5,10 +5,77 @@ use crate::prelude::*;
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
-        (update_animation_state, cycle_character_animation)
+        (
+            sync_held_weapon,
+            apply_weapon_sheet,
+            update_animation_state,
+            cycle_character_animation,
+        )
             .chain()
             .in_set(VfxSystems::Select),
     );
+}
+
+/// The [`WeaponFamily`] of the character's mainhand item, or `None` when the hand is empty or
+/// holds something outside the families. Frozen once the character is dying, so dropping the
+/// weapon on death doesn't swap sheets mid-fall.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Deref)]
+pub(super) struct HeldWeapon(Option<WeaponFamily>);
+
+/// Sheets for a character whose art draws the weapon in hand: one per weapon family it can hold,
+/// plus `unarmed` for an empty hand. While a family with a sheet is held, its sheet is shown and
+/// the item's own sprite is hidden so the weapon isn't drawn twice. A family without a sheet
+/// falls back to `unarmed` with the item sprite drawn on top, as before.
+#[derive(Component, Clone, Debug)]
+pub(in crate::character) struct WeaponSheets {
+    pub unarmed: Handle<Image>,
+    pub sword: Option<Handle<Image>>,
+    pub axe: Option<Handle<Image>>,
+    pub staff: Option<Handle<Image>>,
+}
+
+impl WeaponSheets {
+    /// The sheet that draws `family` in hand, if there is one.
+    fn drawing(&self, family: WeaponFamily) -> Option<&Handle<Image>> {
+        match family {
+            WeaponFamily::Sword => self.sword.as_ref(),
+            WeaponFamily::Axe => self.axe.as_ref(),
+            WeaponFamily::Staff => self.staff.as_ref(),
+        }
+    }
+}
+
+fn sync_held_weapon(
+    mut holders: Query<(&mut HeldWeapon, Option<&Mainhand>, &CharacterAnimationState)>,
+    families: Query<&WeaponFamily>,
+) {
+    for (mut held, mainhand, state) in &mut holders {
+        if *state == CharacterAnimationState::Dying {
+            continue;
+        }
+        let family = mainhand.and_then(|hand| families.get(hand.get()).ok().copied());
+        held.set_if_neq(HeldWeapon(family));
+    }
+}
+
+fn apply_weapon_sheet(
+    mut holders: Query<(&HeldWeapon, &WeaponSheets, &mut Sprite, Option<&Mainhand>)>,
+    mut items: Query<&mut Visibility, With<Equipped>>,
+) {
+    for (held, sheets, mut sprite, mainhand) in &mut holders {
+        let drawn = held.0.and_then(|family| sheets.drawing(family));
+        let image = drawn.unwrap_or(&sheets.unarmed);
+        if sprite.image != *image {
+            sprite.image = image.clone();
+        }
+        // Equipping makes the item visible, so this runs every frame rather than on change.
+        if drawn.is_some()
+            && let Some(mainhand) = mainhand
+            && let Ok(mut visibility) = items.get_mut(mainhand.get())
+        {
+            visibility.set_if_neq(Visibility::Hidden);
+        }
+    }
 }
 
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -60,6 +127,17 @@ impl Default for AnimationSheet {
 }
 
 impl AnimationSheet {
+    /// The knight's sheets (`tools/sprites/lpc_sheet.py` builds them): the LPC layout with a
+    /// 4-frame breathing idle and a 7-frame death that buckles, slumps and topples.
+    pub(super) fn knight() -> Self {
+        let mut sheet = Self::default();
+        sheet.animations[CharacterAnimationState::Idle.index()] =
+            state_rows([14, 15, 12, 13], 4, 0.3);
+        sheet.animations[CharacterAnimationState::Dying.index()] =
+            state_rows([20, 20, 20, 20], 7, 0.22);
+        sheet
+    }
+
     /// Flapping flier layout sharing one wingbeat loop.
     pub(super) fn bat() -> Self {
         const BAT_FRAMES_PER_ROW: usize = 4;
@@ -148,20 +226,31 @@ fn update_animation_state(
 }
 
 fn cycle_character_animation(
+    mut commands: Commands,
     mut query: Query<
         (
+            Entity,
             &mut AnimationIndices,
-            &mut AnimationTimer,
+            Option<&mut AnimationTimer>,
             &mut Sprite,
             &CharacterAnimationState,
             &FacingDirection,
             &AnimationSheet,
+            Option<&HeldWeapon>,
         ),
         Or<(Changed<CharacterAnimationState>, Changed<FacingDirection>)>,
     >,
 ) {
-    for (mut indices, mut timer, mut sprite, state, direction, sheet) in &mut query {
-        let animation = sheet.get(*state, *direction);
+    for (entity, mut indices, timer, mut sprite, state, direction, sheet, held) in &mut query {
+        let mut animation = *sheet.get(*state, *direction);
+        // An attack lasts as long as the weapon's use, so the swing on screen ends with the
+        // hitbox (or the cast with the bolt) instead of being cut off or running past it.
+        if *state == CharacterAnimationState::Attacking
+            && let Some(family) = held.and_then(|held| held.0)
+        {
+            let frames = animation.frame_count as f32;
+            animation.frame_duration = family.attack_seconds() / frames;
+        }
         let first = animation.row * sheet.columns + animation.first_column;
         let last = first + animation.frame_count - 1;
 
@@ -179,22 +268,34 @@ fn cycle_character_animation(
 
         // A phase-preserving sheet also keeps its clock, or a facing flip
         // every frame would freeze the loop. Only a duration change re-arms it.
+        // A finished one-shot (attack, death) has had its timer removed by `animate_sprites`.
         let frame_duration = std::time::Duration::from_secs_f32(animation.frame_duration);
-        if !sheet.preserve_phase || timer.duration() != frame_duration {
-            *timer = AnimationTimer(Timer::from_seconds(
-                animation.frame_duration,
-                TimerMode::Repeating,
-            ));
+        let fresh = AnimationTimer(Timer::from_seconds(
+            animation.frame_duration,
+            TimerMode::Repeating,
+        ));
+        match timer {
+            Some(mut timer) if !sheet.preserve_phase || timer.duration() != frame_duration => {
+                *timer = fresh;
+            }
+            Some(_) => {}
+            None => {
+                commands.entity(entity).insert(fresh);
+            }
         }
 
         if let Some(atlas) = &mut sprite.texture_atlas {
             atlas.index = first + offset;
         }
 
-        // Dying plays once and holds its last frame; looping it would flash the
-        // character back to standing just as the despawn / game-over timer ends.
+        // Attacks and dying play once and hold their last frame. A looping death would flash the
+        // character back to standing just as the despawn / game-over timer ends, and a looping
+        // attack would restart the swing if the weapon's use ran a moment long.
         // `animate_sprites` drops the timer once the one-shot runs out.
-        if *state == CharacterAnimationState::Dying {
+        if matches!(
+            state,
+            CharacterAnimationState::Attacking | CharacterAnimationState::Dying
+        ) {
             *indices = AnimationIndices::OneShot(first + 1..=last);
             continue;
         }

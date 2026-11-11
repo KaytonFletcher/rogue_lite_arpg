@@ -20,6 +20,12 @@ pub(super) fn plugin(app: &mut App) {
 
 /// Farthest target distance at which an AI holder casts a staff.
 pub const STAFF_REACH: f32 = 360.0;
+/// Seconds from the start of a cast to the bolt leaving the staff, about where the cast
+/// animation thrusts forward.
+const STAFF_FIRE_TIME: f32 = 0.25;
+/// Seconds from the bolt leaving to the end of the cast; with [`STAFF_FIRE_TIME`] this makes up
+/// the staff family's attack time.
+const STAFF_RETURN_TIME: f32 = WeaponFamily::Staff.attack_seconds() - STAFF_FIRE_TIME;
 /// Fraction of the standard fireball speed used by the fire mage's single-bolt staff.
 const MAGE_SINGLE_BOLT_SPEED_FACTOR: f32 = 0.7;
 /// Fraction of the standard fireball speed used by the fire mage's three-bolt staff.
@@ -77,7 +83,7 @@ pub fn mage_fire_staff_fan(
 fn flame_staff_core(sprites: &SpriteAssets) -> impl Scene {
     bsn! {
         @staff(sprites.fire_staff.clone(), 0.5)
-        Staff { fire_time: 0.1, return_time: 0.1 }
+        Staff { fire_time: STAFF_FIRE_TIME, return_time: STAFF_RETURN_TIME }
         ~Item::new(1340, ItemKind::Staff)
         ManaCost(6.0)
     }
@@ -87,7 +93,7 @@ pub fn ice_staff(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) ->
     bsn! {
         @staff(sprites.ice_staff.clone(), 1.0)
         Name::new("Staff of Ice")
-        Staff { fire_time: 0.15, return_time: 0.15 }
+        Staff { fire_time: STAFF_FIRE_TIME, return_time: STAFF_RETURN_TIME }
         ~Item::new(2050, ItemKind::Staff)
         // big mana cost
         ManaCost(15.0)
@@ -102,6 +108,7 @@ pub fn ice_staff(sprites: &SpriteAssets, sprite_layouts: &SpriteSheetLayouts) ->
 fn staff(image: Handle<Image>, cooldown: f32) -> impl Scene {
     bsn! {
         Staff { source_offset: Vec2::new(0.0, 26.0) }
+        WeaponFamily::Staff
         ~Equippable::new(EquipmentSlot::Mainhand, cooldown, &STAFF_EQUIPMENT_POSES)
             .with_reach(STAFF_REACH)
         Sprite { image }
