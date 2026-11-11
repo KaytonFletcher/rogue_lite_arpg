@@ -11,7 +11,8 @@ mod vision;
 use avian2d::prelude::*;
 use bevy::prelude::*;
 
-use self::animation::{AnimationSheet, CharacterAnimationState};
+pub(in crate::character) use self::animation::WeaponSheets;
+use self::animation::{AnimationSheet, CharacterAnimationState, HeldWeapon};
 pub(in crate::character) use self::collider::physical_collider;
 use crate::prelude::*;
 
@@ -55,6 +56,7 @@ pub(super) fn plugin(app: &mut App) {
     Mass(50.0),
     NoAutoMass,
     CharacterAnimationState,
+    HeldWeapon,
     Vision,
     ItemCapacity(10),
     AnimationTimer,

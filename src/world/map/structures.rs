@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use super::blueprint::{MapBlueprint, MapError, Placement, PlacementKind};
 use super::placement::{PlaceContext, PlaceRule, place};
-use super::tiles::{TileGrid, TileKind, TileRect};
+use super::tiles::{GroundMark, TileGrid, TileKind, TileRect};
 
 /// Tile data and placement markers for a reusable map structure.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -294,17 +294,120 @@ fn paint_blob(
     random_generator: &mut ChaCha8Rng,
     tile: TileKind,
 ) {
+    for cell in blob_cells(rect, random_generator) {
+        tiles.set(cell, tile);
+    }
+}
+
+/// Cells of an organic blob inside `rect`, rolled in a fixed order so a seed always
+/// paints the same shape.
+fn blob_cells(rect: TileRect, random_generator: &mut ChaCha8Rng) -> Vec<IVec2> {
     let half_extents = rect.size.as_vec2() / 2.0;
     let center = rect.min.as_vec2() + half_extents;
     let maximum = rect.max_exclusive();
+    let mut cells = Vec::new();
     for x in rect.min.x..maximum.x {
         for y in rect.min.y..maximum.y {
             let tile_center = IVec2::new(x, y).as_vec2() + Vec2::splat(0.5) - center;
             let normalized = tile_center / (half_extents + Vec2::splat(0.5));
             let shoreline = random_generator.random_range(-0.25..0.25);
             if normalized.length_squared() <= 1.0 + shoreline {
-                tiles.set(IVec2::new(x, y), tile);
+                cells.push(IVec2::new(x, y));
             }
         }
     }
+    cells
+}
+
+/// Cells covered by a visual-only feature's shape inside `rect`.
+fn shape_cells(
+    rect: TileRect,
+    shape: FeatureShape,
+    random_generator: &mut ChaCha8Rng,
+) -> Vec<IVec2> {
+    match shape {
+        FeatureShape::Square => {
+            let maximum = rect.max_exclusive();
+            (rect.min.x..maximum.x)
+                .flat_map(|x| (rect.min.y..maximum.y).map(move |y| IVec2::new(x, y)))
+                .collect()
+        }
+        FeatureShape::Blob => blob_cells(rect, random_generator),
+    }
+}
+
+/// Claims a footprint for a visual-only feature, then releases it: marks and haze paint
+/// over whatever is there, so they never stop later structures or spawns.
+fn claim_visual_footprint(
+    blueprint: &MapBlueprint,
+    context: &mut PlaceContext,
+    rule: &PlaceRule,
+    random_generator: &mut ChaCha8Rng,
+    feature_name: &str,
+    size: Option<FeatureSize>,
+) -> Result<Option<TileRect>, MapError> {
+    let rect = claim_feature_footprint(
+        blueprint,
+        context,
+        rule,
+        random_generator,
+        feature_name,
+        size,
+        2,
+        6,
+    )?;
+    if let Some(rect) = rect
+        && let Some(index) = context
+            .reserved
+            .iter()
+            .rposition(|reserved| *reserved == rect)
+    {
+        context.reserved.remove(index);
+    }
+    Ok(rect)
+}
+
+/// Paints a ground mark (a fissure or a scorch), 2–6 tiles by default. Marks are drawn on
+/// their own layer over the terrain and leave movement and spawning alone.
+/// Returns the mark's center tile, or `None` when placement failed.
+pub fn build_mark(
+    blueprint: &mut MapBlueprint,
+    context: &mut PlaceContext,
+    rule: &PlaceRule,
+    mark: GroundMark,
+    size: Option<FeatureSize>,
+    shape: FeatureShape,
+    random_generator: &mut ChaCha8Rng,
+) -> Result<Option<IVec2>, MapError> {
+    let Some(rect) =
+        claim_visual_footprint(blueprint, context, rule, random_generator, "mark", size)?
+    else {
+        return Ok(None);
+    };
+    for cell in shape_cells(rect, shape, random_generator) {
+        blueprint.marks.set(cell, Some(mark));
+    }
+    Ok(Some(rect.center_tile()))
+}
+
+/// Paints low haze, 2–6 tiles by default. Haze is drawn above characters and leaves
+/// movement and spawning alone.
+/// Returns the haze's center tile, or `None` when placement failed.
+pub fn build_haze(
+    blueprint: &mut MapBlueprint,
+    context: &mut PlaceContext,
+    rule: &PlaceRule,
+    size: Option<FeatureSize>,
+    shape: FeatureShape,
+    random_generator: &mut ChaCha8Rng,
+) -> Result<Option<IVec2>, MapError> {
+    let Some(rect) =
+        claim_visual_footprint(blueprint, context, rule, random_generator, "haze", size)?
+    else {
+        return Ok(None);
+    };
+    for cell in shape_cells(rect, shape, random_generator) {
+        blueprint.haze.set(cell, true);
+    }
+    Ok(Some(rect.center_tile()))
 }

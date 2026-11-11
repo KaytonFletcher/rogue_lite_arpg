@@ -76,6 +76,7 @@ pub struct AnimationTimer(pub Timer);
 #[derive(Clone, Copy, Debug)]
 pub struct AnimationData {
     pub row: usize,          // Row in the sprite sheet
+    pub first_column: usize, // Column of the first frame in that row
     pub frame_count: usize,  // Number of frames in animation
     pub frame_duration: f32, // Duration of each frame
 }

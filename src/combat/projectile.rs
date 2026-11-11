@@ -68,6 +68,7 @@ pub fn fireball(
 
 /// Builds a fireball at a custom speed, scaling its lifespan so it still covers
 /// the standard fireball's travel distance.
+#[expect(unused_braces, reason = "bsn! takes expression arguments in braces")]
 pub fn fireball_with_speed(
     sprites: &SpriteAssets,
     sprite_layouts: &SpriteSheetLayouts,

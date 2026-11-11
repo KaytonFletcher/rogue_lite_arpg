@@ -8,7 +8,10 @@ use rand_chacha::ChaCha8Rng;
 use super::blueprint::{MapBlueprint, MapError, Placement, PlacementKind};
 use super::placement::{PlaceContext, place};
 use super::recipe::{MapRecipe, RecipeCatalog, StructureKind, load_recipes, resolved_name};
-use super::structures::{Structure, apply_structure, build_empty_square, build_pond, build_rubble};
+use super::structures::{
+    Structure, apply_structure, build_empty_square, build_haze, build_mark, build_pond,
+    build_rubble,
+};
 use crate::prelude::*;
 use crate::world::MapRng;
 
@@ -361,6 +364,23 @@ fn place_structures(
             StructureKind::Rubble { size } => {
                 build_rubble(blueprint, placement_context, &rule, *size, random_generator)?
             }
+            StructureKind::Mark { mark, size, shape } => build_mark(
+                blueprint,
+                placement_context,
+                &rule,
+                *mark,
+                *size,
+                *shape,
+                random_generator,
+            )?,
+            StructureKind::Haze { size, shape } => build_haze(
+                blueprint,
+                placement_context,
+                &rule,
+                *size,
+                *shape,
+                random_generator,
+            )?,
             StructureKind::Structure(kind) => {
                 let structure = structures
                     .get(kind)

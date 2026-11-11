@@ -149,6 +149,9 @@ RecipeFile(
                 (kind: EmptySquare()),
                 (kind: Pond(size: Ranged((5, 3), (12, 8)), shape: Blob)),
                 (kind: Rubble(), count: 3),
+                (kind: Mark(mark: Fissure, size: Ranged((3, 1), (7, 3)), shape: Blob)),
+                (kind: Mark(mark: Scorch, size: Ranged((2, 2), (4, 4)), shape: Blob)),
+                (kind: Haze(size: Ranged((4, 3), (9, 6)), shape: Blob)),
             ],
         ),
         (

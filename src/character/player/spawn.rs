@@ -5,8 +5,9 @@ use super::aim::player_aim;
 use super::input::player_actions;
 use super::interact::PlayerInteractionRadius;
 use super::{Player, death, overlay};
-use crate::character::physical_collider;
+use crate::character::animation::AnimationSheet;
 use crate::character::vision::TargetInfo;
+use crate::character::{WeaponSheets, physical_collider};
 use crate::prelude::*;
 
 pub(super) fn spawn_player(
@@ -21,8 +22,15 @@ pub(super) fn spawn_player(
         .id();
 
     let stats = game_progress.base_stats;
+    // The knight's sheets draw his weapon in hand; the starting fire staff picks the staff sheet.
+    let sheets = WeaponSheets {
+        unarmed: sprites.knight_unarmed_sprite_sheet.clone(),
+        sword: Some(sprites.knight_sword_sprite_sheet.clone()),
+        axe: Some(sprites.knight_axe_sprite_sheet.clone()),
+        staff: Some(sprites.knight_staff_sprite_sheet.clone()),
+    };
     let sprite = Sprite::from_atlas_image(
-        sprites.player_sprite_sheet.clone(),
+        sprites.knight_staff_sprite_sheet.clone(),
         TextureAtlas {
             layout: sprite_layouts.player.clone(),
             ..default()
@@ -38,6 +46,8 @@ pub(super) fn spawn_player(
             ~Mana::new(100.0, 10.0)
             stats
             template(move |_| Ok(sprite.clone()))
+            template(move |_| Ok(sheets.clone()))
+            ~AnimationSheet::knight()
             TargetInfo
             on(death::on_player_defeated)
             on(overlay::on_equipment_use_succeeded)

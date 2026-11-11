@@ -5,8 +5,11 @@ use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
 use super::blueprint::{MapBlueprint, PlacementKind};
-use super::tiles::{TileGrid, TileKind, TileRect};
-use super::tiling::tile_appearance;
+use super::tiles::{GroundMark, TileGrid, TileKind, TileRect};
+use super::tiling::{
+    HAZE_FRAMES, TerrainLayer, cell_piece, decor_piece, dual_size, haze_piece, mark_piece,
+    terrain_piece, water_piece,
+};
 use crate::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
@@ -54,66 +57,129 @@ fn spawn_tiles(
     coordinates: &TileToWorld,
 ) {
     let _span = info_span!("map::spawn_tiles").entered();
+    let mut layers = MapLayers {
+        commands,
+        map,
+        texture: &tiles.atlas,
+        tile_size: coordinates.tile_size,
+    };
     let map_size = blueprint.map_size();
-    let grid_size: TilemapGridSize = coordinates.tile_size.into();
-    let tilemap_entity = commands.spawn_empty().id();
-    let mut storage = TileStorage::empty(map_size.into());
+    let dual_size = dual_size(map_size);
+    let seed = blueprint.seed;
+    let terrain = &blueprint.tiles;
 
-    for x in 0..map_size.x {
-        for y in 0..map_size.y {
-            let tile_index = IVec2::new(x as i32, y as i32);
-            let Some(tile_kind) = blueprint.tiles.get(tile_index) else {
-                continue;
-            };
-            let Some(appearance) =
-                tile_appearance(&blueprint.tiles, blueprint.seed, tile_index, tile_kind)
-            else {
-                continue;
-            };
+    // Dual-grid layers sit on cell corners, so their grid is one larger and, centred like the
+    // cell grid, lands half a tile down-left of it. Draw order rises with z.
+    layers.spawn("Water Layer", dual_size, 0.0, None, |corner| {
+        water_piece(terrain, seed, corner)
+    });
+    for (index, layer) in TerrainLayer::ALL.into_iter().enumerate() {
+        let z = 0.1 * (index + 1) as f32;
+        layers.spawn(layer.name(), dual_size, z, None, |corner| {
+            terrain_piece(terrain, seed, layer, corner)
+        });
+    }
+    layers.spawn("Decor Layer", map_size, 0.45, None, |tile| {
+        decor_piece(terrain, seed, tile)
+    });
+    for (index, mark) in GroundMark::ALL.into_iter().enumerate() {
+        let z = 0.5 + 0.05 * index as f32;
+        layers.spawn("Mark Layer", dual_size, z, None, |corner| {
+            mark_piece(&blueprint.marks, seed, mark, corner)
+        });
+    }
+    layers.spawn("Cell Layer", map_size, 0.7, None, |tile| {
+        cell_piece(terrain, seed, tile)
+    });
+    let haze_animation = Some(HAZE_FRAMES);
+    layers.spawn(
+        "Haze Layer",
+        dual_size,
+        ZLayer::Haze.z(),
+        haze_animation,
+        |corner| haze_piece(&blueprint.haze, corner),
+    );
+}
 
-            let tile_position = TilePos { x, y };
-            // Seeded tint comes from tiling; nothing else varies per tile.
-            let color = appearance
-                .brightness
-                .map_or_else(TileColor::default, |brightness| {
-                    TileColor(Color::srgb(brightness, brightness, brightness))
-                });
-            let tile_entity = commands
-                .spawn((
+/// Haze drift speed, in animation frames per second.
+const HAZE_FRAMES_PER_SECOND: f32 = 3.0;
+
+/// Spawns the map's tilemap layers as children of the map entity.
+struct MapLayers<'a, 'w, 's> {
+    commands: &'a mut Commands<'w, 's>,
+    map: Entity,
+    texture: &'a Handle<Image>,
+    tile_size: TilemapTileSize,
+}
+
+impl MapLayers<'_, '_, '_> {
+    /// Spawns one layer of `size` tiles at height `z`, asking `piece` for each tile's atlas
+    /// slot. With `frames`, each tile cycles through that many consecutive slots. A layer
+    /// with no tiles is skipped.
+    fn spawn(
+        &mut self,
+        name: &'static str,
+        size: UVec2,
+        z: f32,
+        frames: Option<u32>,
+        mut piece: impl FnMut(IVec2) -> Option<u32>,
+    ) {
+        let tilemap_entity = self.commands.spawn_empty().id();
+        let mut storage = TileStorage::empty(size.into());
+        let mut placed = false;
+
+        for x in 0..size.x {
+            for y in 0..size.y {
+                let Some(texture_index) = piece(IVec2::new(x as i32, y as i32)) else {
+                    continue;
+                };
+                let position = TilePos { x, y };
+                let mut tile = self.commands.spawn((
                     Name::new("Tile"),
                     TileBundle {
-                        position: tile_position,
+                        position,
                         tilemap_id: TilemapId(tilemap_entity),
-                        texture_index: TileTextureIndex(appearance.texture_index),
-                        color,
+                        texture_index: TileTextureIndex(texture_index),
                         ..default()
                     },
                     ChildOf(tilemap_entity),
-                ))
-                .id();
-            storage.set(&tile_position, tile_entity);
+                ));
+                if let Some(frames) = frames {
+                    tile.insert(AnimatedTile {
+                        start: texture_index,
+                        end: texture_index + frames,
+                        speed: HAZE_FRAMES_PER_SECOND,
+                    });
+                }
+                storage.set(&position, tile.id());
+                placed = true;
+            }
         }
-    }
 
-    commands.entity(tilemap_entity).insert((
-        Name::new("Tiles"),
-        TilemapBundle {
-            grid_size,
-            size: map_size.into(),
-            storage,
-            map_type: TilemapType::Square,
-            texture: TilemapTexture::Single(tiles.atlas.clone()),
-            tile_size: coordinates.tile_size,
-            anchor: TilemapAnchor::Center,
-            transform: Transform::default(),
-            ..default()
-        },
-        ChildOf(map),
-        // The one exception to "only NextMap::set despawns map pieces": game over clears
-        // the tiles so its screen shows no half-empty map. The map entity itself stays
-        // until the next NextMap::set.
-        DespawnOnExit::<AppState>(AppState::Playing),
-    ));
+        if !placed {
+            self.commands.entity(tilemap_entity).despawn();
+            return;
+        }
+        self.commands.entity(tilemap_entity).insert((
+            Name::new(name),
+            TilemapBundle {
+                grid_size: self.tile_size.into(),
+                size: size.into(),
+                storage,
+                map_type: TilemapType::Square,
+                texture: TilemapTexture::Single(self.texture.clone()),
+                tile_size: self.tile_size,
+                anchor: TilemapAnchor::Center,
+                transform: Transform::from_xyz(0.0, 0.0, z),
+                ..default()
+            },
+            ChildOf(self.map),
+            // The one exception to "only NextMap::set despawns map pieces": game over clears
+            // the tiles so its screen shows no half-empty map. The map entity itself stays
+            // until the next NextMap::set.
+            DespawnOnExit::<AppState>(AppState::Playing),
+        ));
+    }
 }
 
 // ---------------------------------------------------------------------------

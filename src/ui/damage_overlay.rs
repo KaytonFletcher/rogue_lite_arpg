@@ -24,6 +24,7 @@ fn entity_height(
 }
 
 /// Text is placed relative to `origin`, which is the center of the entity the text is for.
+#[expect(unused_braces, reason = "bsn! takes expression arguments in braces")]
 fn health_change_text(origin: Vec3, entity_height: f32, amount: f32, color: Color) -> impl Scene {
     // Create a quaternion for the random rotation
     let random_rotation = Quat::from_axis_angle(Vec3::Z, random_angle(30.0));

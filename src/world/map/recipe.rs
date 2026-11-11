@@ -17,7 +17,7 @@ use super::build::{MapRequest, MapResult, Stage, build_from_recipe};
 use super::placement::{Anchor, CountRange, DecileRange, PlaceRule, Side};
 use super::spawn::MAX_MAP_TILES;
 use super::structures::{FeatureShape, FeatureSize, Structure, structure_from_glyphs};
-use super::tiles::TileKind;
+use super::tiles::{GroundMark, TileKind};
 use crate::prelude::*;
 use crate::world::MapRng;
 
@@ -286,6 +286,23 @@ pub(super) enum StructureKind {
         #[serde(default)]
         size: Option<FeatureSize>,
     },
+    /// A ground mark on its own layer, 2–6 tiles by default; visual only:
+    /// `Mark(mark: Fissure, size: Ranged((1, 3), (2, 6)), shape: Blob)`.
+    Mark {
+        mark: GroundMark,
+        #[serde(default)]
+        size: Option<FeatureSize>,
+        #[serde(default)]
+        shape: FeatureShape,
+    },
+    /// Low haze drawn above characters, 2–6 tiles by default; visual only:
+    /// `Haze(size: Ranged((3, 3), (8, 6)), shape: Blob)`.
+    Haze {
+        #[serde(default)]
+        size: Option<FeatureSize>,
+        #[serde(default)]
+        shape: FeatureShape,
+    },
 }
 
 impl StructureKind {
@@ -296,13 +313,19 @@ impl StructureKind {
             Self::EmptySquare { .. } => "EmptySquare",
             Self::Pond { .. } => "Pond",
             Self::Rubble { .. } => "Rubble",
+            Self::Mark { .. } => "Mark",
+            Self::Haze { .. } => "Haze",
         }
     }
 
     pub(super) fn feature_size(&self) -> Option<FeatureSize> {
         match self {
             Self::Structure(_) => None,
-            Self::EmptySquare { size } | Self::Pond { size, .. } | Self::Rubble { size } => *size,
+            Self::EmptySquare { size }
+            | Self::Pond { size, .. }
+            | Self::Rubble { size }
+            | Self::Mark { size, .. }
+            | Self::Haze { size, .. } => *size,
         }
     }
 }
@@ -763,7 +786,9 @@ pub(super) fn structures_place(
             StructureKind::Structure(kind) => structures.get(kind),
             StructureKind::EmptySquare { .. }
             | StructureKind::Pond { .. }
-            | StructureKind::Rubble { .. } => None,
+            | StructureKind::Rubble { .. }
+            | StructureKind::Mark { .. }
+            | StructureKind::Haze { .. } => None,
         })
         .any(|structure| {
             structure

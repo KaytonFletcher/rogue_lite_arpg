@@ -8,9 +8,10 @@
 //!   │ PlaceRule::{Fixed, Random, NearStructure, Edge}
 //!   │ + PlaceContext { reserved, structure_centers_by_name, points, keep_clear }
 //!   ▼ OnEnter(SpawnMap), chained:
-//!   populate_map_tiles ─▶ "Tiles" child (bevy_ecs_tilemap, one tile_atlas.png,
-//!   │                        texture picked by (seed, tile, neighbours):
-//!   │                        centre variants, wall top/face pieces, bank edges)
+//!   populate_map_tiles ─▶ tilemap layer children (bevy_ecs_tilemap, one tile_atlas.png):
+//!   │                        dual-grid water, ground, grass, cobblestone and ground marks,
+//!   │                        the cell grid (walls, wood, void), then haze above characters
+//!   │                        (pieces picked in tiling.rs from seed, corners and neighbours)
 //!   spawn_colliders    ─▶ merged Static rects over blocking runs (Wall/Water/DeadZone)
 //!   spawn_placements   ─▶ player transform │ SpawnEnemies/Npcs/Chests │ portal Exit
 //!   TileToWorld: tile ◄──► world conversions (single source of truth)
@@ -23,8 +24,9 @@
 //!   spawns pick their location from the same `Location` options.
 //! - Build order: size, structures, fixed-anchor spawns, player start (kept the recipe's
 //!   `start_clearance` from enemies), exits, enemies, chests, NPCs (see `Stage`).
-//! - `MapBlueprint` is renderer-agnostic data (`TileGrid<TileKind>` + placements). All backend
-//!   detail (`TilemapBundle`, atlas slots) stays inside `spawn.rs`.
+//! - `MapBlueprint` is renderer-agnostic data (`TileGrid<TileKind>`, mark and haze grids,
+//!   placements). All backend detail (`TilemapBundle`, atlas slots) stays inside `spawn.rs` and
+//!   `tiling.rs`.
 //! - Structures are glyph grids (: = transparent, letters = placements over floor); builtin
 //!   features (`EmptySquare`, `Pond`, ...) are picked by reserved kind name and share footprint
 //!   reservation. Portals sit one tile inside a solid wall border; no doorway is carved.

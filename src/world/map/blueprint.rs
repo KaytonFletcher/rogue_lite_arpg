@@ -3,7 +3,7 @@ use std::fmt;
 
 use bevy::prelude::*;
 
-use super::tiles::{TileGrid, TileKind};
+use super::tiles::{GroundMark, TileGrid, TileKind};
 use crate::prelude::*;
 
 /// Generated map tiles and placements, plus the replay key (`recipe`, `seed`) that built them.
@@ -12,6 +12,10 @@ use crate::prelude::*;
 pub struct MapBlueprint {
     /// Tile grid containing the map terrain.
     pub tiles: TileGrid,
+    /// Ground marks (fissures, scorch) drawn over the terrain. Purely visual.
+    pub marks: TileGrid<Option<GroundMark>>,
+    /// Cells under low haze, drawn above characters. Purely visual.
+    pub haze: TileGrid<bool>,
     /// Entity placements associated with this map.
     pub placements: Vec<Placement>,
     /// Name of the recipe that built this map.
@@ -30,6 +34,8 @@ impl MapBlueprint {
 
         Self {
             tiles,
+            marks: TileGrid::new(map_size, None),
+            haze: TileGrid::new(map_size, false),
             placements: Vec::new(),
             recipe,
             seed,
