@@ -22,14 +22,21 @@ def main():
     parser.add_argument("sheet")
     parser.add_argument("out")
     parser.add_argument("--scale", type=int, default=3)
+    parser.add_argument("--knight", action="store_true",
+                        help="the knight's timings (`AnimationSheet::knight`): 4 idle and 7 dying "
+                             "frames")
     args = parser.parse_args()
+    states = STATES
+    if args.knight:
+        counts = {"idle": 4, "dying": 7}
+        states = [(name, row, counts.get(name, count)) for name, row, count in STATES]
     sheet = Image.open(args.sheet).convert("RGBA")
-    longest = max(count for _, _, count in STATES)
+    longest = max(count for _, _, count in states)
     frames = []
     for tick in range(longest * 2):
-        canvas = Image.new("RGBA", (4 * CELL, len(STATES) * (CELL + 10)), BACKGROUND)
+        canvas = Image.new("RGBA", (4 * CELL, len(states) * (CELL + 10)), BACKGROUND)
         draw = ImageDraw.Draw(canvas)
-        for row, (name, first, count) in enumerate(STATES):
+        for row, (name, first, count) in enumerate(states):
             y = row * (CELL + 10)
             draw.text((2, y), name, fill=(255, 240, 200, 255))
             for column, offset in enumerate(SHOW):

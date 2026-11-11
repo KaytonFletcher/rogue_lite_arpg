@@ -47,7 +47,8 @@ the project doc `art/art_direction_state.md`. The rules are in `art/style_guide_
 | `recompose.py` | Swaps refined props into a scene: finds each old prop by its ramp+step pattern and draws the new one with the same per-pixel lighting offset. |
 | `refined/`, `scenes/` | PixelLab-refined props (cleaned) and the two recomposed 640x360 scenes. |
 | `../sprites/lpc_sheet.py` | PixelLab animation strips (`../sprites/pixellab/<name>/`) to the 13x21 LPC sheet `AnimationSheet::default()` reads, cleaned onto the palette. |
-| `../sprites/sheet_preview.py` | A GIF of every state of an LPC sheet in four directions. |
+| | The knight has one sheet per weapon family (`assets/player/knight_{unarmed,sword,axe,staff}.png`); the game swaps them on equip. Rebuild each with `lpc_sheet.py tools/sprites/pixellab/knight_<family> assets/player/knight_<family>.png --ramps steel,ash,earth,flesh,cedar,rust,banner,reed --neutral-ramps ash,steel --idle-frames 0,1,2,3 --death-direction east --death-frames 0,1,2,3,4,5,6`. |
+| `../sprites/sheet_preview.py` | A GIF of every state of an LPC sheet in four directions (`--knight` for the knight's 4-frame idle and 7-frame death). |
 | `../tileset/decor/` | The 64 decor sprites (PixelLab, cleaned) placed by the decor layer. |
 
 Generated PNGs under `tools/art`, `tools/tileset`, `tools/sprites`, the tile atlas and the
